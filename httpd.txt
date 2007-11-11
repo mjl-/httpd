@@ -1,0 +1,33 @@
+emu -c0
+bind '#U*/home' /usr
+ndb/cs
+cd
+cd src/httpd/appl/cmd
+sblpath=(/dis .)
+httpd -dhl -s /scgi/ net!localhost!4006 /tmp &
+
+emu -c0
+bind '#U*/home' /usr
+ndb/cs
+cd
+cd src/scgid/
+scgid -d doc/scgid.conf
+
+telnet localhost 8000
+GET /../../ HTTP/1.1
+host: localhost
+
+telnet localhost 8000
+GET /scgi/test HTTP/1.0
+host: localhost
+
+telnet localhost 8000
+GET /lala.pdf HTTP/1.1
+host: localhost
+connection: close
+
+telnet localhost 8000
+GET
+host: localhost
+
+
