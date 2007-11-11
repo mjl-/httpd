@@ -1,19 +1,5 @@
 implement Httpd;
 
-# xxx
-# - better headers
-# - post, head, trace, options, etc.
-# - headers: expect, accept-*, content-range, e-tag
-# - conditional headers requests
-
-# - transparent compression?
-# - connection rate limiting?
-# - redirects?  rewrites?
-# - auth?
-# - normal cgi?
-# - try to fix dir listings for paths with multiple slashes in them.  firefox breaks on them, is firefox right?
-# - test with other browsers
-
 include "sys.m";
 include "draw.m";
 include "arg.m";

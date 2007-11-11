@@ -1,0 +1,22 @@
+httpd is a simple httpd.
+
+features:
+- http/1.0, http/1.1
+- scgi support
+- virtual hosts
+- sending content-type based on file extension
+- error/access logging
+- html directory listings
+
+todo:
+- better headers
+- post, head, trace, options, etc.
+- headers: expect, accept-*, content-range, e-tag, conditionals
+
+- transparent compression?
+- connection rate limiting?
+- redirects?  rewrites?
+- auth?
+- normal cgi?
+- try to fix dir listings for paths with multiple slashes in them.  firefox breaks on them, is firefox right?
+- test with other browsers
