@@ -9,9 +9,8 @@ features:
 - html directory listings
 
 todo:
-- better headers
-- post, head, trace, options, etc.
-- headers: expect, accept-*, content-range, e-tag, conditionals
+- post, head
+- headers: expect, accept-*, content-range, e-tag, conditionals, many more
 
 - transparent compression?
 - connection rate limiting?

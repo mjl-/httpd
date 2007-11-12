@@ -256,9 +256,15 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			hdrs.add("content-type", "message/http");
 			herror(chunked, fd, op, "200", "OK", req.pack());
 			continue;
-		OPTIONS or HEAD or POST or PUT or DELETE or CONNECT =>
-			herror(chunked, fd, op, "501", "not implemented", "method not yet implemented");
+
+		OPTIONS =>
+			hdrs.add("allow", "OPTIONS, GET, HEAD, POST");
+			herror(chunked, fd, op, "200", "OK", "");
 			continue;
+
+		HEAD or POST or PUT or DELETE or CONNECT =>
+			herror(chunked, fd, op, "501", "not implemented", "method not yet implemented");
+
 		* =>
 			herror(chunked, fd, op, "400", "bad request", "unknown method");
 			return;
@@ -406,6 +412,9 @@ httpserve(fd: ref Sys->FD, conndir: string)
 
 hwrite(chunked: int, fd: ref Sys->FD, d: array of byte)
 {
+	if(len d == 0)
+		return;
+
 	if(chunked) {
 		length := array of byte sprint("%x\r\n", len d);
 		nd := array[len length+len d+2] of byte;
