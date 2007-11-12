@@ -22,7 +22,7 @@ GET /scgi/test HTTP/1.0
 host: localhost
 
 telnet localhost 8000
-GET /lala.pdf HTTP/1.1
+GET / HTTP/1.1
 host: localhost
 connection: close
 
@@ -30,4 +30,11 @@ telnet localhost 8000
 GET
 host: localhost
 
+telnet localhost 8000
+TRACE / HTTP/1.1
+host: www.ueber.net
+
+telnet localhost 8000
+OPTIONS * HTTP/1.1
+host: www.ueber.net
 
