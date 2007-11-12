@@ -20,3 +20,23 @@ todo:
 - normal cgi?
 - try to fix dir listings for paths with multiple slashes in them.  firefox breaks on them, is firefox right?
 - test with other browsers
+
+install
+
+to install this software, make sure there is a mkconfig file in
+this directory.  you can symlink/bind the one from your inferno
+installation.  next, type "mk install".  httpd depends on package
+"http", the http library, published using mercurial:  hg clone
+static-http://www.ueber.net/who/mjl/hg/http/.
+
+latest version
+
+this code is kept up to date using mercurial, to get a fresh copy:
+
+	hg clone static-http://www.ueber.net/who/mjl/hg/httpd/
+
+licence
+
+all files written by me (i.e. all except the doc/rfc2616.txt) are
+in the public domain.  for bugs, questions, comments, etc., contact
+me at mechiel@ueber.net or mechiel@xs4all.nl.
