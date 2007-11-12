@@ -18,7 +18,8 @@ str: String;
 http: Http;
 
 print, sprint, fprint, fildes: import sys;
-Url, Req, Resp, Hdrs, HTTP_10, HTTP_11, GET, encodepath: import http;
+Url, Req, Resp, Hdrs, HTTP_10, HTTP_11, encodepath: import http;
+OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, CONNECT: import http;
 
 
 Op: adt {
@@ -234,7 +235,8 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		chat(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), http->versionstr(req.version)));
 		op.req = req;
 
-		# verify get, !http/0.9, host present for http/1.1 (or full url as path)
+		# xxx host present for http/1.1 (or full url as path)
+
 		http11 := req.version == HTTP_11;
 		chunked := http11 && !req.h.has("connection", "close");
 		keepalive = chunked;
@@ -246,6 +248,22 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			hdrs.add("connection", "close");
 		}
 		op.resp = resp := ref Resp(req.version, "200", "OK", hdrs);
+
+		case req.method {
+		GET =>
+			;
+		TRACE =>
+			hdrs.add("content-type", "message/http");
+			herror(chunked, fd, op, "200", "OK", req.pack());
+			continue;
+		OPTIONS or HEAD or POST or PUT or DELETE or CONNECT =>
+			herror(chunked, fd, op, "501", "not implemented", "method not yet implemented");
+			continue;
+		* =>
+			herror(chunked, fd, op, "400", "bad request", "unknown method");
+			return;
+		}
+
 		path := pathsanitize(req.url.path);
 		chat(id, "path is "+path);
 
@@ -411,12 +429,13 @@ herror(chunked: int, fd: ref Sys->FD, op: Op, st, stmsg, errmsg: string)
 	resp := op.resp;
 	resp.st = st;
 	resp.stmsg = stmsg;
-	resp.h.add("content-type", "text/plain");
+	if(!resp.h.has("content-type", nil))
+		resp.h.add("content-type", "text/plain");
 	err := resp.write(fd);
 	if(err != nil)
 		die(op.id, "writing error response: "+err);
 
-	hwrite(chunked, fd, array of byte (errmsg+"\n"));
+	hwrite(chunked, fd, array of byte errmsg);
 	hwriteeof(chunked, fd);
 
 	accesslog(op);
