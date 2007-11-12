@@ -11,6 +11,8 @@ features:
 todo:
 - post, head
 - headers: expect, accept-*, content-range, e-tag, conditionals, many more
+- timeouts on keep-alive connections
+- make sure inferno devices cannot be accessed
 
 - transparent compression?
 - connection rate limiting?

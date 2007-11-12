@@ -229,7 +229,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		if(rerr != nil) {
 			hdrs.add("connection", "close");
 			op.resp = ref Resp(HTTP_10, nil, nil, hdrs);
-			herror(0, fd, op, "400", "bad request", "bad request: "+rerr);
+			respond(0, fd, op, "400", "bad request", "bad request: "+rerr);
 			die(id, "reading request: "+rerr);
 		}
 		chat(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), http->versionstr(req.version)));
@@ -254,19 +254,24 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			;
 		TRACE =>
 			hdrs.add("content-type", "message/http");
-			herror(chunked, fd, op, "200", "OK", req.pack());
+			respond(chunked, fd, op, "200", "OK", req.pack());
 			continue;
 
 		OPTIONS =>
 			hdrs.add("allow", "OPTIONS, GET, HEAD, POST");
-			herror(chunked, fd, op, "200", "OK", "");
+			respond(chunked, fd, op, "200", "OK", "");
 			continue;
 
-		HEAD or POST or PUT or DELETE or CONNECT =>
-			herror(chunked, fd, op, "501", "not implemented", "method not yet implemented");
+		HEAD or POST =>
+			respond(chunked, fd, op, "501", "not implemented", "method not yet implemented");
+			continue;
+
+		PUT or DELETE =>
+			respond(chunked, fd, op, "501", "not implemented", "method not implemented");
+			continue;
 
 		* =>
-			herror(chunked, fd, op, "400", "bad request", "unknown method");
+			respond(chunked, fd, op, "400", "bad request", "unknown method");
 			return;
 		}
 
@@ -280,14 +285,14 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			(hostdir, nil) = str->splitstrl(hostdir, ":");
 			if(str->drop(hostdir, "0-9a-zA-Z.-") != nil || str->splitstrl(hostdir, "..").t1 != nil) {
 				chat(id, "bad host in header");
-				herror(chunked, fd, op, "404", "file not found", "object not found: "+path);
+				respond(chunked, fd, op, "404", "file not found", "object not found: "+path);
 				continue;
 			}
 		}
 		if(hflag && sys->chdir(hostdir) != 0) {
 			hostdir = "_default";
 			if(havehost && sys->chdir(hostdir) != 0) {
-				herror(chunked, fd, op, "404", "file not found", "object not found: "+path);
+				respond(chunked, fd, op, "404", "file not found", "object not found: "+path);
 				continue;
 			}
 		}
@@ -297,25 +302,25 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			scgichan <-= (scgiaddr, replychan := chan of (ref Sys->FD, string));
 			(sfd, serr) := <-replychan;
 			if(serr != nil) {
-				herror(chunked, fd, op, "503", "internal server error", "internal server error");
+				respond(chunked, fd, op, "503", "internal server error", "internal server error");
 				die(id, serr);
 			}
 
 			sreq := scgirequest(path, scgipath, req, lhost, lport, rhost, rport);
 			if(sys->write(sfd, sreq, len sreq) != len sreq) {
-				herror(chunked, fd, op, "503", "internal server error", "internal server error");
+				respond(chunked, fd, op, "503", "internal server error", "internal server error");
 				die(id, sprint("write scgi request: %r"));
 			}
 
 			sb := bufio->fopen(sfd, Bufio->OREAD);
 			if(sb == nil) {
-				herror(chunked, fd, op, "503", "internal server error", "internal server error");
+				respond(chunked, fd, op, "503", "internal server error", "internal server error");
 				die(id, sprint("bufio fopen scgi fd: %r"));
 			}
 
 			l := sb.gets('\n');
 			if(!str->prefix("Status: ", l)) {
-				herror(chunked, fd, op, "503", "internal server error", "internal server error");
+				respond(chunked, fd, op, "503", "internal server error", "internal server error");
 				die(id, "bad scgi response line: "+l);
 			}
 			l = l[len "Status: ":];
@@ -331,7 +336,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 
 			(hdrs, rerr) = Hdrs.read(sb);
 			if(rerr != nil) {
-				herror(chunked, fd, op, "503", "internal server error", "internal server error");
+				respond(chunked, fd, op, "503", "internal server error", "internal server error");
 				die(id, "reading scgi headers: "+rerr);
 			}
 			for(hl := hdrs.all(); hl != nil; hl = tl hl)
@@ -357,7 +362,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		dfd := sys->open("."+path, Sys->OREAD);
 		if(dfd == nil || ((nil, dir) := sys->fstat(dfd)).t0 != 0 || (dir.mode&Sys->DMDIR) && (!lflag || path != nil && path[len path-1] != '/')) {
 			chat(id, "file not found");
-			herror(chunked, fd, op, "404", "file not found", "object not found: "+path);
+			respond(chunked, fd, op, "404", "file not found", "object not found: "+path);
 			continue;
 		}
 
@@ -433,7 +438,7 @@ hwriteeof(chunked: int, fd: ref Sys->FD)
 		fprint(fd, "0\r\n\r\n");
 }
 
-herror(chunked: int, fd: ref Sys->FD, op: Op, st, stmsg, errmsg: string)
+respond(chunked: int, fd: ref Sys->FD, op: Op, st, stmsg, errmsg: string)
 {
 	resp := op.resp;
 	resp.st = st;
@@ -454,19 +459,6 @@ accesslog(op: Op)
 {
 	if(accessfd != nil && op.req != nil)
 		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.url.pack(), http->versionstr(op.req.version), op.resp.st, op.resp.stmsg, op.req.h.get("user-agent"));
-}
-
-herror0(id, chunked: int, fd: ref Sys->FD, resp: ref Resp, st, stmsg, errmsg: string)
-{
-	resp.st = st;
-	resp.stmsg = stmsg;
-	resp.h.add("content-type", "text/plain");
-	err := resp.write(fd);
-	if(err != nil)
-		die(id, "writing response: "+err);
-
-	hwrite(chunked, fd, array of byte (errmsg+"\n"));
-	hwriteeof(chunked, fd);
 }
 
 findscgi(path: string): (string, string)
