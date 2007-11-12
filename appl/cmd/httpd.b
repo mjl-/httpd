@@ -73,6 +73,7 @@ types := array[] of {
 
 idch: chan of int;
 
+timefd: ref Sys->FD;
 errorfd: ref Sys->FD;
 accessfd: ref Sys->FD;
 
@@ -114,6 +115,10 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->pctl(Sys->FORKNS, nil);
 	if(sys->chdir(webroot) != 0)
 		fail(sprint("chdir webroot %s: %r", webroot));
+
+	timefd = sys->open("/dev/time", Sys->OREAD);
+	if(timefd == nil)
+		fail(sprint("open /dev/time: %r"));
 
 	errorfd = sys->open("/services/logs/httpderror", Sys->ORDWR);
 	accessfd = sys->open("/services/logs/httpdaccess", Sys->ORDWR);
@@ -195,7 +200,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		raise "sys-stat not okay";
 	say(sprint("current dir: %s", sdir.name));
 
-	op := Op(id, daytime->now(), rhost, rport, lhost, lport, nil, nil);
+	op := Op(id, 0, rhost, rport, lhost, lport, nil, nil);
 
 	sys->pctl(Sys->NEWNS, nil);
 
@@ -216,9 +221,13 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		if(sys->chdir("/") != 0)
 			break;
 
+		op.now = readtime();
+		hdrs := Hdrs.new(("date", httpdate(op.now))::nil);
+
 		(req, rerr) := Req.read(b);
 		if(rerr != nil) {
-			op.resp = ref Resp(HTTP_10, nil, nil, Hdrs.new(("connection", "close")::nil));
+			hdrs.add("connection", "close");
+			op.resp = ref Resp(HTTP_10, nil, nil, hdrs);
 			herror(0, fd, op, "400", "bad request", "bad request: "+rerr);
 			die(id, "reading request: "+rerr);
 		}
@@ -230,7 +239,6 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		chunked := http11 && !req.h.has("connection", "close");
 		keepalive = chunked;
 
-		hdrs := Hdrs.new(nil);
 		if(chunked && keepalive) {
 			hdrs.add("transfer-encoding", "chunked");
 			hdrs.add("connection", "keep-alive");
@@ -561,6 +569,15 @@ gettype(path: string): string
 	return "application/octet-stream";
 }
 
+days := array[] of {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+months := array[] of {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+
+httpdate(t: int): string
+{
+	tm := daytime->gmt(t);
+	return sprint("%s, %02d %s %d %02d:%02d:%02d GMT", days[tm.wday], tm.mday, months[tm.mon], tm.year+1900, tm.hour, tm.min, tm.sec);
+}
+
 readfileline(path: string, maxsize: int): (string, string)
 {
 	fd := sys->open(path, Sys->OREAD);
@@ -573,6 +590,14 @@ readfileline(path: string, maxsize: int): (string, string)
 	if(s != nil && s[len s-1] == '\n')
 		s = s[:len s-1];
 	return (s, nil);
+}
+
+readtime(): int
+{
+	n := sys->pread(timefd, d := array[64] of byte, len d, big 0);
+	if(n < 0)
+		fail(sprint("reading time: %r"));
+	return int ((big string d[:n])/big 1000000);
 }
 
 has(s: string, c: int): int
