@@ -250,7 +250,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		op.resp = ref Resp(req.version, "200", "OK", hdrs);
 
 		case req.method {
-		GET =>
+		GET or HEAD =>
 			;
 		TRACE =>
 			hdrs.add("content-type", "message/http");
@@ -262,7 +262,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			respond(chunked, fd, op, "200", "OK", "");
 			continue;
 
-		HEAD or POST =>
+		POST =>
 			respond(chunked, fd, op, "501", "not implemented", "method not yet implemented");
 			continue;
 
@@ -329,6 +329,9 @@ plainfile(chunked: int, fd: ref Sys->FD, path: string, op: Op, dfd: ref Sys->FD)
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
 
+	if(op.req.method == HEAD)
+		return;
+
 	for(;;) {
 		n := sys->read(dfd, d := array[Sys->ATOMICIO] of byte, len d);
 		if(n < 0)
@@ -350,6 +353,9 @@ listdir(chunked: int, fd: ref Sys->FD, path: string, op: Op, dfd: ref Sys->FD)
 	rerr := resp.write(fd);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
+
+	if(op.req.method == HEAD)
+		return;
 
 	begin := sprint("<html><head><style type=\"text/css\">h1 { font-size: 1.4em; } td, th { padding-left: 1em; padding-right: 1em; } td.mtime, td.size { text-align: right; }</style><title>listing for %s</title></head><body><h1>listing for %s</h1><hr/><table><tr><th>last modified</th><th>size</th><th>name</th></tr>\n", path, pathurls(path));
 	hwrite(chunked, fd, array of byte begin);
@@ -378,6 +384,11 @@ scgi(chunked: int, fd: ref Sys->FD, path: string, op: Op, scgipath, scgiaddr: st
 	id := op.id;
 	req := op.req;
 	resp := op.resp;
+
+	if(req.method == HEAD) {
+		respond(chunked, fd, op, "501", "not implemented", "HEAD on scgi paths not implemented");
+		return;
+	}
 
 	chat(id, sprint("handling scgi request, scgipath %q scgiaddr %q", scgipath, scgiaddr));
 	scgichan <-= (scgiaddr, replychan := chan of (ref Sys->FD, string));
@@ -473,8 +484,10 @@ respond(chunked: int, fd: ref Sys->FD, op: Op, st, stmsg, errmsg: string)
 	if(err != nil)
 		die(op.id, "writing error response: "+err);
 
-	hwrite(chunked, fd, array of byte errmsg);
-	hwriteeof(chunked, fd);
+	if(op.req == nil || op.req.method != HEAD) {
+		hwrite(chunked, fd, array of byte errmsg);
+		hwriteeof(chunked, fd);
+	}
 
 	accesslog(op);
 }
