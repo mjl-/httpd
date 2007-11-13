@@ -78,7 +78,7 @@ timefd: ref Sys->FD;
 errorfd: ref Sys->FD;
 accessfd: ref Sys->FD;
 
-scgi: list of (string, string);
+scgipaths: list of (string, string);
 scgichan: chan of (string, chan of (ref Sys->FD, string));
 
 init(nil: ref Draw->Context, args: list of string)
@@ -103,7 +103,7 @@ init(nil: ref Draw->Context, args: list of string)
 			http->debug = 1;
 		's' =>	spath := arg->earg();
 			saddr := arg->earg();
-			scgi = (spath, saddr)::scgi;
+			scgipaths = (spath, saddr)::scgipaths;
 		* =>	arg->usage();
 		}
 	args = arg->argv();
@@ -247,7 +247,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		} else {
 			hdrs.add("connection", "close");
 		}
-		op.resp = resp := ref Resp(req.version, "200", "OK", hdrs);
+		op.resp = ref Resp(req.version, "200", "OK", hdrs);
 
 		case req.method {
 		GET =>
@@ -298,64 +298,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		}
 
 		if(((scgipath, scgiaddr) := findscgi(path)).t1 != nil) {
-			chat(id, sprint("handling scgi request, scgipath %q scgiaddr %q", scgipath, scgiaddr));
-			scgichan <-= (scgiaddr, replychan := chan of (ref Sys->FD, string));
-			(sfd, serr) := <-replychan;
-			if(serr != nil) {
-				respond(chunked, fd, op, "503", "internal server error", "internal server error");
-				die(id, serr);
-			}
-
-			sreq := scgirequest(path, scgipath, req, lhost, lport, rhost, rport);
-			if(sys->write(sfd, sreq, len sreq) != len sreq) {
-				respond(chunked, fd, op, "503", "internal server error", "internal server error");
-				die(id, sprint("write scgi request: %r"));
-			}
-
-			sb := bufio->fopen(sfd, Bufio->OREAD);
-			if(sb == nil) {
-				respond(chunked, fd, op, "503", "internal server error", "internal server error");
-				die(id, sprint("bufio fopen scgi fd: %r"));
-			}
-
-			l := sb.gets('\n');
-			if(!str->prefix("Status: ", l)) {
-				respond(chunked, fd, op, "503", "internal server error", "internal server error");
-				die(id, "bad scgi response line: "+l);
-			}
-			l = l[len "Status: ":];
-			(st, stmsg) := str->splitstrl(l, " ");
-			if(stmsg != nil)
-				stmsg = stmsg[1:];
-			while(stmsg != nil && str->in(stmsg[len stmsg-1], "\r\n"))
-				stmsg = stmsg[:len stmsg-1];
-			resp.st = st;
-			resp.stmsg = stmsg;
-
-			accesslog(op);
-
-			(hdrs, rerr) = Hdrs.read(sb);
-			if(rerr != nil) {
-				respond(chunked, fd, op, "503", "internal server error", "internal server error");
-				die(id, "reading scgi headers: "+rerr);
-			}
-			for(hl := hdrs.all(); hl != nil; hl = tl hl)
-				resp.h.add((hd hl).t0, (hd hl).t1);
-
-			rerr = resp.write(fd);
-			if(rerr != nil)
-				die(id, "writing response: "+rerr);
-
-			for(;;) {
-				n := sys->read(sfd, d := array[Sys->ATOMICIO] of byte, len d);
-				if(n < 0)
-					die(id, sprint("reading file: %r"));
-				if(n == 0)
-					break;
-				hwrite(chunked, fd, d[:n]);
-			}
-			hwriteeof(chunked, fd);
-			chat(id, "request done");
+			scgi(chunked, fd, path, op, scgipath, scgiaddr);
 			continue;
 		}
 
@@ -368,51 +311,132 @@ httpserve(fd: ref Sys->FD, conndir: string)
 
 		accesslog(op);
 
-		if(dir.mode & Sys->DMDIR) {
-			chat(id, "doing directory listing");
-			resp.h.add("content-type", "text/html");
-			rerr = resp.write(fd);
-			if(rerr != nil)
-				die(id, "writing response: "+rerr);
-
-			begin := sprint("<html><head><style type=\"text/css\">h1 { font-size: 1.4em; } td, th { padding-left: 1em; padding-right: 1em; } td.mtime, td.size { text-align: right; }</style><title>listing for %s</title></head><body><h1>listing for %s</h1><hr/><table><tr><th>last modified</th><th>size</th><th>name</th></tr>\n", path, pathurls(path));
-			hwrite(chunked, fd, array of byte begin);
-			for(;;) {
-				(nd, d) := sys->dirread(dfd);
-				if(nd < 0)
-					die(id, sprint("reading dir: %r"));
-				if(nd == 0)
-					break;
-				html := "";
-				for(i := 0; i < nd && i < len d; i++) {
-					name := d[i].name;
-					if(d[i].mode & Sys->DMDIR)
-						name += "/";
-					html += sprint("<tr><td class=\"mtime\">%s</td><td class=\"size\">%bd</td><td class=\"name\"><a href=\"%s\">%s</a></td></tr>\n", daytime->filet(op.now, d[i].mtime), d[i].length, htmlescape(encodepath(name)), htmlescape(name));
-				}
-				hwrite(chunked, fd, array of byte html);
-			}
-			end := sprint("</table><hr/></body></html>\n");
-			hwrite(chunked, fd, array of byte end);
-			hwriteeof(chunked, fd);
-		} else {
-			chat(id, "doing plain file");
-			resp.h.add("content-type", gettype(path));
-			rerr = resp.write(fd);
-			if(rerr != nil)
-				die(id, "writing response: "+rerr);
-
-			for(;;) {
-				n := sys->read(dfd, d := array[Sys->ATOMICIO] of byte, len d);
-				if(n < 0)
-					die(id, sprint("reading file: %r"));
-				if(n == 0)
-					break;
-				hwrite(chunked, fd, d[:n]);
-			}
-			hwriteeof(chunked, fd);
-		}
+		if(dir.mode & Sys->DMDIR)
+			listdir(chunked, fd, path, op, dfd);
+		else
+			plainfile(chunked, fd, path, op, dfd);
 	}
+}
+
+plainfile(chunked: int, fd: ref Sys->FD, path: string, op: Op, dfd: ref Sys->FD)
+{
+	id := op.id;
+	resp := op.resp;
+
+	chat(id, "doing plain file");
+	resp.h.add("content-type", gettype(path));
+	rerr := resp.write(fd);
+	if(rerr != nil)
+		die(id, "writing response: "+rerr);
+
+	for(;;) {
+		n := sys->read(dfd, d := array[Sys->ATOMICIO] of byte, len d);
+		if(n < 0)
+			die(id, sprint("reading file: %r"));
+		if(n == 0)
+			break;
+		hwrite(chunked, fd, d[:n]);
+	}
+	hwriteeof(chunked, fd);
+}
+
+listdir(chunked: int, fd: ref Sys->FD, path: string, op: Op, dfd: ref Sys->FD)
+{
+	id := op.id;
+	resp := op.resp;
+
+	chat(id, "doing directory listing");
+	resp.h.add("content-type", "text/html");
+	rerr := resp.write(fd);
+	if(rerr != nil)
+		die(id, "writing response: "+rerr);
+
+	begin := sprint("<html><head><style type=\"text/css\">h1 { font-size: 1.4em; } td, th { padding-left: 1em; padding-right: 1em; } td.mtime, td.size { text-align: right; }</style><title>listing for %s</title></head><body><h1>listing for %s</h1><hr/><table><tr><th>last modified</th><th>size</th><th>name</th></tr>\n", path, pathurls(path));
+	hwrite(chunked, fd, array of byte begin);
+	for(;;) {
+		(nd, d) := sys->dirread(dfd);
+		if(nd < 0)
+			die(id, sprint("reading dir: %r"));
+		if(nd == 0)
+			break;
+		html := "";
+		for(i := 0; i < nd && i < len d; i++) {
+			name := d[i].name;
+			if(d[i].mode & Sys->DMDIR)
+				name += "/";
+			html += sprint("<tr><td class=\"mtime\">%s</td><td class=\"size\">%bd</td><td class=\"name\"><a href=\"%s\">%s</a></td></tr>\n", daytime->filet(op.now, d[i].mtime), d[i].length, htmlescape(encodepath(name)), htmlescape(name));
+		}
+		hwrite(chunked, fd, array of byte html);
+	}
+	end := sprint("</table><hr/></body></html>\n");
+	hwrite(chunked, fd, array of byte end);
+	hwriteeof(chunked, fd);
+}
+
+scgi(chunked: int, fd: ref Sys->FD, path: string, op: Op, scgipath, scgiaddr: string)
+{
+	id := op.id;
+	req := op.req;
+	resp := op.resp;
+
+	chat(id, sprint("handling scgi request, scgipath %q scgiaddr %q", scgipath, scgiaddr));
+	scgichan <-= (scgiaddr, replychan := chan of (ref Sys->FD, string));
+	(sfd, serr) := <-replychan;
+	if(serr != nil) {
+		respond(chunked, fd, op, "503", "internal server error", "internal server error");
+		die(id, serr);
+	}
+
+	sreq := scgirequest(path, scgipath, req, op);
+	if(sys->write(sfd, sreq, len sreq) != len sreq) {
+		respond(chunked, fd, op, "503", "internal server error", "internal server error");
+		die(id, sprint("write scgi request: %r"));
+	}
+
+	sb := bufio->fopen(sfd, Bufio->OREAD);
+	if(sb == nil) {
+		respond(chunked, fd, op, "503", "internal server error", "internal server error");
+		die(id, sprint("bufio fopen scgi fd: %r"));
+	}
+
+	l := sb.gets('\n');
+	if(!str->prefix("Status: ", l)) {
+		respond(chunked, fd, op, "503", "internal server error", "internal server error");
+		die(id, "bad scgi response line: "+l);
+	}
+	l = l[len "Status: ":];
+	(st, stmsg) := str->splitstrl(l, " ");
+	if(stmsg != nil)
+		stmsg = stmsg[1:];
+	while(stmsg != nil && str->in(stmsg[len stmsg-1], "\r\n"))
+		stmsg = stmsg[:len stmsg-1];
+	resp.st = st;
+	resp.stmsg = stmsg;
+
+	accesslog(op);
+
+	(hdrs, rerr) := Hdrs.read(sb);
+	if(rerr != nil) {
+		respond(chunked, fd, op, "503", "internal server error", "internal server error");
+		die(id, "reading scgi headers: "+rerr);
+	}
+	for(hl := hdrs.all(); hl != nil; hl = tl hl)
+		resp.h.add((hd hl).t0, (hd hl).t1);
+
+	rerr = resp.write(fd);
+	if(rerr != nil)
+		die(id, "writing response: "+rerr);
+
+	for(;;) {
+		n := sys->read(sfd, d := array[Sys->ATOMICIO] of byte, len d);
+		if(n < 0)
+			die(id, sprint("reading file: %r"));
+		if(n == 0)
+			break;
+		hwrite(chunked, fd, d[:n]);
+	}
+	hwriteeof(chunked, fd);
+	chat(id, "request done");
 }
 
 hwrite(chunked: int, fd: ref Sys->FD, d: array of byte)
@@ -463,7 +487,7 @@ accesslog(op: Op)
 
 findscgi(path: string): (string, string)
 {
-	for(l := scgi; l != nil; l = tl l)
+	for(l := scgipaths; l != nil; l = tl l)
 		if(str->prefix((hd l).t0, path))
 			return hd l;
 	return (nil, nil);
@@ -526,11 +550,11 @@ pathurls(s: string): string
 	return r;
 }
 
-scgirequest(path, scgipath: string, req: ref Req, lhost, lport, rhost, rport: string): array of byte
+scgirequest(path, scgipath: string, req: ref Req, op: Op): array of byte
 {
 	servername := req.h.get("host");
 	if(servername == nil)
-		servername = lhost;
+		servername = op.lhost;
 	pathinfo := path[len scgipath:];
 	l  :=	("CONTENT_LENGTH",	"0")::
 		("GATEWAY_INTERFACE",	"CGI/1.1")::
@@ -543,10 +567,10 @@ scgirequest(path, scgipath: string, req: ref Req, lhost, lport, rhost, rport: st
 		("PATH_INFO",		pathinfo)::
 		("PATH_TRANSLATED",	pathinfo)::
 		("QUERY_STRING",	req.url.query)::
-		("SERVER_ADDR",		lhost)::
-		("SERVER_PORT",		lport)::
-		("REMOTE_ADDR",		rhost)::
-		("REMOTE_PORT",		rport)::
+		("SERVER_ADDR",		op.lhost)::
+		("SERVER_PORT",		op.lport)::
+		("REMOTE_ADDR",		op.rhost)::
+		("REMOTE_PORT",		op.rport)::
 		environment;
 	s := "";
 	for(h := l; h != nil; h = tl h)
