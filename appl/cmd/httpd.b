@@ -258,7 +258,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			continue;
 
 		OPTIONS =>
-			hdrs.add("allow", "OPTIONS, GET, HEAD, POST");
+			hdrs.add("allow", "OPTIONS, GET, HEAD, POST, TRACE");
 			respond(chunked, fd, op, "200", "OK", "");
 			continue;
 
