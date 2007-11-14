@@ -9,11 +9,13 @@ include "bufio.m";
 include "daytime.m";
 include "env.m";
 include "string.m";
+include "exception.m";
 include "mhttp.m";
 
 sys: Sys;
 daytime: Daytime;
 env: Env;
+exc: Exception;
 str: String;
 http: Http;
 
@@ -89,6 +91,7 @@ init(nil: ref Draw->Context, args: list of string)
 	env = load Env Env->PATH;
 	daytime = load Daytime Daytime->PATH;
 	str = load String String->PATH;
+	exc = load Exception Exception->PATH;
 	http = load Http Http->PATH;
 	http->init(bufio);
 
@@ -203,7 +206,10 @@ httpserve(fd: ref Sys->FD, conndir: string)
 
 	op := Op(id, 0, rhost, rport, lhost, lport, nil, nil);
 
-	sys->pctl(Sys->NEWNS, nil);
+	sys->pctl(Sys->NEWPGRP, nil);
+	if(exc->setexcmode(Exception->NOTIFYLEADER) != 0)
+		die(id, sprint("setting exception handling: %r"));
+	sys->pctl(Sys->NEWNS|Sys->NODEVS, nil);
 
 	(ok, sdir) = sys->stat("/");
 	if(ok != 0)
@@ -250,7 +256,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		op.resp = ref Resp(req.version, "200", "OK", hdrs);
 
 		case req.method {
-		GET or HEAD =>
+		GET or HEAD or POST =>
 			;
 		TRACE =>
 			hdrs.add("content-type", "message/http");
@@ -258,12 +264,9 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			continue;
 
 		OPTIONS =>
+			# xxx should be based on path
 			hdrs.add("allow", "OPTIONS, GET, HEAD, POST, TRACE");
 			respond(chunked, fd, op, "200", "OK", "");
-			continue;
-
-		POST =>
-			respond(chunked, fd, op, "501", "not implemented", "method not yet implemented");
 			continue;
 
 		PUT or DELETE =>
@@ -323,6 +326,11 @@ plainfile(chunked: int, fd: ref Sys->FD, path: string, op: Op, dfd: ref Sys->FD)
 	id := op.id;
 	resp := op.resp;
 
+	if(op.req.method == POST) {
+		respond(chunked, fd, op, "405", "method not allowed", "POST not allowed on files");
+		return;
+	}
+
 	chat(id, "doing plain file");
 	resp.h.add("content-type", gettype(path));
 	rerr := resp.write(fd);
@@ -347,6 +355,11 @@ listdir(chunked: int, fd: ref Sys->FD, path: string, op: Op, dfd: ref Sys->FD)
 {
 	id := op.id;
 	resp := op.resp;
+
+	if(op.req.method == POST) {
+		respond(chunked, fd, op, "405", "method not allowed", "POST not allowed on directories");
+		return;
+	}
 
 	chat(id, "doing directory listing");
 	resp.h.add("content-type", "text/html");
@@ -390,6 +403,12 @@ scgi(chunked: int, fd: ref Sys->FD, path: string, op: Op, scgipath, scgiaddr: st
 		return;
 	}
 
+	if(req.method == POST && !req.h.has("content-length", nil)) {
+		respond(chunked, fd, op, "400", "bad request", "POST needs a content-length");
+		return;
+	}
+	length := int req.h.get("content-length");
+
 	chat(id, sprint("handling scgi request, scgipath %q scgiaddr %q", scgipath, scgiaddr));
 	scgichan <-= (scgiaddr, replychan := chan of (ref Sys->FD, string));
 	(sfd, serr) := <-replychan;
@@ -398,11 +417,14 @@ scgi(chunked: int, fd: ref Sys->FD, path: string, op: Op, scgipath, scgiaddr: st
 		die(id, serr);
 	}
 
-	sreq := scgirequest(path, scgipath, req, op);
+	sreq := scgirequest(path, scgipath, req, op, length);
 	if(sys->write(sfd, sreq, len sreq) != len sreq) {
 		respond(chunked, fd, op, "503", "internal server error", "internal server error");
 		die(id, sprint("write scgi request: %r"));
 	}
+
+	if(length > 0)
+		spawn scgifunnel(fd, sfd, length);
 
 	sb := bufio->fopen(sfd, Bufio->OREAD);
 	if(sb == nil) {
@@ -448,6 +470,20 @@ scgi(chunked: int, fd: ref Sys->FD, path: string, op: Op, scgipath, scgiaddr: st
 	}
 	hwriteeof(chunked, fd);
 	chat(id, "request done");
+}
+
+scgifunnel(fd, sfd: ref Sys->FD, length: int)
+{
+	while(length > 0) {
+		n := sys->read(fd, d := array[Sys->ATOMICIO] of byte, len d);
+		if(n < 0)
+			fail(sprint("fail:scgi read: %r"));
+		if(n == 0)
+			fail(sprint("fail:scgi read: premature eof"));
+		if(sys->write(sfd, d, n) != n)
+			fail(sprint("fail:scgi write: %r"));
+		length -= n;
+	}
 }
 
 hwrite(chunked: int, fd: ref Sys->FD, d: array of byte)
@@ -563,18 +599,18 @@ pathurls(s: string): string
 	return r;
 }
 
-scgirequest(path, scgipath: string, req: ref Req, op: Op): array of byte
+scgirequest(path, scgipath: string, req: ref Req, op: Op, length: int): array of byte
 {
 	servername := req.h.get("host");
 	if(servername == nil)
 		servername = op.lhost;
 	pathinfo := path[len scgipath:];
-	l  :=	("CONTENT_LENGTH",	"0")::
+	l  :=	("CONTENT_LENGTH",	string length)::
 		("GATEWAY_INTERFACE",	"CGI/1.1")::
-		("SERVER_PROTOCOL",	http->versionstr(req.method))::
+		("SERVER_PROTOCOL",	http->versionstr(req.version))::
 		("SERVER_NAME",		servername)::
 		("SCGI",		"1")::
-		("REQUEST_METHOD",	"GET")::
+		("REQUEST_METHOD",	http->methodstr(req.method))::
 		("REQUEST_URI",		path)::
 		("SCRIPT_NAME",		path)::
 		("PATH_INFO",		pathinfo)::
