@@ -9,6 +9,7 @@ features:
 - html directory listings
 
 todo:
+- don't use chunked for plain file or dir listing, use content-length instead.  set content-length for head as well.  should scgi response be done non-chunked if it sets its content-length?
 - headers: expect, accept-*, content-range, e-tag, conditionals, many more
 - timeouts on keep-alive connections
 

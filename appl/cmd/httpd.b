@@ -35,7 +35,7 @@ Op: adt {
 	resp:	ref Resp;
 };
 
-dflag, hflag, lflag: int;
+cflag, dflag, hflag, lflag: int;
 addr := "net!localhost!8000";
 webroot := "";
 environment: list of (string, string);
@@ -101,10 +101,11 @@ init(nil: ref Draw->Context, args: list of string)
 	http->init(bufio);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-a addr] [-dhl] [-s path addr] webroot");
+	arg->setusage(arg->progname()+" [-a addr] [-cdhl] [-s path addr] webroot");
 	while((c := arg->opt()) != 0)
 		case c {
 		'a' =>	addr = arg->earg();
+		'c' =>	cflag++;
 		'd' =>	dflag++;
 		'h' =>	hflag++;
 		'l' =>	lflag++;
@@ -343,6 +344,8 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
 	resp.h.add("content-type", gettype(path));
 	resp.h.add("last-modified", httpdate(dir.mtime));
 	resp.h.add("etag", etag(path, op, dir));
+	if(cflag)
+		resp.h.add("cache-control", maxage(path));
 	rerr := resp.write(op.fd);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
@@ -376,6 +379,8 @@ listdir(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
 	resp.h.add("content-type", "text/html");
 	resp.h.add("last-modified", httpdate(dir.mtime));
 	resp.h.add("etag", etag(path, op, dir));
+	if(cflag)
+		resp.h.add("cache-control", maxage(path));
 	rerr := resp.write(op.fd);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
@@ -546,7 +551,12 @@ etag(path: string, op: Op, dir: Sys->Dir): string
 	host := op.req.h.get("host");
 	if(host == nil)
 		host = "_default";
-	return sha1(array of byte sprint("%d,%d,%s,%s,%s", dir.qid.vers, dir.mtime, host, op.lport, path));
+	return "\""+sha1(array of byte sprint("%d,%d,%s,%s,%s", dir.qid.vers, dir.mtime, host, op.lport, path))+"\"";
+}
+
+maxage(nil: string): string
+{
+	return "maxage=600";
 }
 
 accesslog(op: Op)
