@@ -10,10 +10,14 @@ features:
 
 todo:
 - don't use chunked for plain file or dir listing, use content-length instead.  set content-length for head as well.  should scgi response be done non-chunked if it sets its content-length?
-- headers: expect, accept-*, content-range, e-tag, conditionals, many more
+- conditionals: if-match, if-none-match, if-range.  if-(un)?modified-since for non-get non-plainfile.
+- range/content-range, if-range
+- headers: expect, accept-*, many more
 - timeouts on keep-alive connections
+- cache times based on other heuristics?  or by config?
+- move to config file?
 
-- what to do for "complex" requests on (s)cgi, such as with range header
+- what to do for "complex" requests on (s)cgi, such as with range header.  is cgi supposed to handle HEAD by itself?
 - transparent compression?
 - connection rate limiting?
 - redirects?  rewrites?
