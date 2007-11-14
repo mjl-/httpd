@@ -10,12 +10,14 @@ include "daytime.m";
 include "env.m";
 include "string.m";
 include "exception.m";
+include "keyring.m";
 include "mhttp.m";
 
 sys: Sys;
 daytime: Daytime;
 env: Env;
 exc: Exception;
+keyring: Keyring;
 str: String;
 http: Http;
 
@@ -92,8 +94,9 @@ init(nil: ref Draw->Context, args: list of string)
 	bufio = load Bufio Bufio->PATH;
 	env = load Env Env->PATH;
 	daytime = load Daytime Daytime->PATH;
-	str = load String String->PATH;
+	keyring = load Keyring Keyring->PATH;
 	exc = load Exception Exception->PATH;
+	str = load String String->PATH;
 	http = load Http Http->PATH;
 	http->init(bufio);
 
@@ -231,7 +234,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			break;
 
 		op.now = readtime();
-		hdrs := Hdrs.new(("date", httpdate(op.now))::nil);
+		hdrs := Hdrs.new(("date", httpdate(op.now))::("server", "inferno-httpd/0")::nil);
 
 		(req, rerr) := Req.read(b);
 		if(rerr != nil) {
@@ -308,7 +311,9 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		}
 
 		dfd := sys->open("."+path, Sys->OREAD);
-		if(dfd == nil || ((nil, dir) := sys->fstat(dfd)).t0 != 0 || (dir.mode&Sys->DMDIR) && (!lflag || path != nil && path[len path-1] != '/')) {
+		if(dfd != nil)
+			(dok, dir) := sys->fstat(dfd);
+		if(dfd == nil || dok != 0 || (dir.mode&Sys->DMDIR) && (!lflag || path != nil && path[len path-1] != '/')) {
 			chat(id, "file not found");
 			respond(op, "404", "file not found", "object not found: "+path);
 			continue;
@@ -317,24 +322,27 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		accesslog(op);
 
 		if(dir.mode & Sys->DMDIR)
-			listdir(path, op, dfd);
+			listdir(path, op, dfd, dir);
 		else
-			plainfile(path, op, dfd);
+			plainfile(path, op, dfd, dir);
 	}
 }
 
-plainfile(path: string, op: Op, dfd: ref Sys->FD)
+plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
 {
 	id := op.id;
 	resp := op.resp;
 
 	if(op.req.method == POST) {
+		resp.h.add("allow", "GET, HEAD, OPTIONS");
 		respond(op, "405", "method not allowed", "POST not allowed on files");
 		return;
 	}
 
 	chat(id, "doing plain file");
 	resp.h.add("content-type", gettype(path));
+	resp.h.add("last-modified", httpdate(dir.mtime));
+	resp.h.add("etag", etag(path, op, dir));
 	rerr := resp.write(op.fd);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
@@ -353,18 +361,21 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD)
 	hwriteeof(op);
 }
 
-listdir(path: string, op: Op, dfd: ref Sys->FD)
+listdir(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
 {
 	id := op.id;
 	resp := op.resp;
 
 	if(op.req.method == POST) {
+		resp.h.add("allow", "GET, HEAD, OPTIONS");
 		respond(op, "405", "method not allowed", "POST not allowed on directories");
 		return;
 	}
 
 	chat(id, "doing directory listing");
 	resp.h.add("content-type", "text/html");
+	resp.h.add("last-modified", httpdate(dir.mtime));
+	resp.h.add("etag", etag(path, op, dir));
 	rerr := resp.write(op.fd);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
@@ -530,6 +541,14 @@ respond(op: Op, st, stmsg, errmsg: string)
 	accesslog(op);
 }
 
+etag(path: string, op: Op, dir: Sys->Dir): string
+{
+	host := op.req.h.get("host");
+	if(host == nil)
+		host = "_default";
+	return sha1(array of byte sprint("%d,%d,%s,%s,%s", dir.qid.vers, dir.mtime, host, op.lport, path));
+}
+
 accesslog(op: Op)
 {
 	if(accessfd != nil && op.req != nil)
@@ -693,6 +712,21 @@ readtime(): int
 	if(n < 0)
 		fail(sprint("reading time: %r"));
 	return int ((big string d[:n])/big 1000000);
+}
+
+byte2str(a: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len a; i++)
+		s += sys->sprint("%02x", int a[i]);
+	return s;
+}
+
+sha1(a: array of byte): string
+{
+	r := array[keyring->SHA1dlen] of byte;
+	keyring->sha1(a, len a, r, nil);
+	return byte2str(r);
 }
 
 has(s: string, c: int): int
