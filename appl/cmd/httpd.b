@@ -241,7 +241,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		if(rerr != nil) {
 			hdrs.add("connection", "close");
 			op.resp = ref Resp(HTTP_10, nil, nil, hdrs);
-			respond(op, "400", "bad request", "bad request: "+rerr);
+			respondtext(op, "400", "bad request", "bad request: "+rerr);
 			die(id, "reading request: "+rerr);
 		}
 		chat(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), http->versionstr(req.version)));
@@ -266,21 +266,21 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			;
 		TRACE =>
 			hdrs.add("content-type", "message/http");
-			respond(op, "200", "OK", req.pack());
+			respondtext(op, "200", "OK", req.pack());
 			continue;
 
 		OPTIONS =>
 			# xxx should be based on path
 			hdrs.add("allow", "OPTIONS, GET, HEAD, POST, TRACE");
-			respond(op, "200", "OK", "");
+			respondtext(op, "200", "OK", "");
 			continue;
 
 		PUT or DELETE =>
-			respond(op, "501", "not implemented", "method not implemented");
+			respondtext(op, "501", "not implemented", "method not implemented");
 			continue;
 
 		* =>
-			respond(op, "501", "not implemented", "unknown method");
+			respondtext(op, "501", "not implemented", "unknown method");
 			return;
 		}
 
@@ -294,14 +294,14 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			(hostdir, nil) = str->splitstrl(hostdir, ":");
 			if(str->drop(hostdir, "0-9a-zA-Z.-") != nil || str->splitstrl(hostdir, "..").t1 != nil) {
 				chat(id, "bad host in header");
-				respond(op, "404", "file not found", "object not found: "+path);
+				respondtext(op, "404", "file not found", "object not found: "+path);
 				continue;
 			}
 		}
 		if(hflag && sys->chdir(hostdir) != 0) {
 			hostdir = "_default";
 			if(havehost && sys->chdir(hostdir) != 0) {
-				respond(op, "404", "file not found", "object not found: "+path);
+				respondtext(op, "404", "file not found", "object not found: "+path);
 				continue;
 			}
 		}
@@ -316,7 +316,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			(dok, dir) := sys->fstat(dfd);
 		if(dfd == nil || dok != 0 || (dir.mode&Sys->DMDIR) && (!lflag || path != nil && path[len path-1] != '/')) {
 			chat(id, "file not found");
-			respond(op, "404", "file not found", "object not found: "+path);
+			respondtext(op, "404", "file not found", "object not found: "+path);
 			continue;
 		}
 
@@ -336,14 +336,28 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
 
 	if(op.req.method == POST) {
 		resp.h.add("allow", "GET, HEAD, OPTIONS");
-		respond(op, "405", "method not allowed", "POST not allowed on files");
+		respondtext(op, "405", "method not allowed", "POST not allowed on files");
 		return;
 	}
 
 	chat(id, "doing plain file");
-	resp.h.add("content-type", gettype(path));
 	resp.h.add("last-modified", httpdate(dir.mtime));
 	resp.h.add("etag", etag(path, op, dir));
+
+	ifunmodsince := parsehttpdate(op.req.h.find("if-unmodified-since").t1);
+	chat(id, sprint("ifunmodsince, %d", ifunmodsince));
+	if(ifunmodsince && dir.mtime > ifunmodsince) {
+		respond(op, "412", "precondition failed", nil, nil);
+		return;
+	}
+	ifmodsince := parsehttpdate(op.req.h.find("if-modified-since").t1);
+	chat(id, sprint("ifmodsince, %d", ifmodsince));
+	if(ifmodsince && dir.mtime < ifmodsince) {
+		respond(op, "304", "not modified", nil, nil);
+		return;
+	}
+
+	resp.h.add("content-type", gettype(path));
 	if(cflag)
 		resp.h.add("cache-control", maxage(path));
 	rerr := resp.write(op.fd);
@@ -371,7 +385,7 @@ listdir(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
 
 	if(op.req.method == POST) {
 		resp.h.add("allow", "GET, HEAD, OPTIONS");
-		respond(op, "405", "method not allowed", "POST not allowed on directories");
+		respondtext(op, "405", "method not allowed", "POST not allowed on directories");
 		return;
 	}
 
@@ -417,27 +431,27 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 	resp := op.resp;
 
 	if(req.method == HEAD) {
-		respond(op, "501", "not implemented", "HEAD on scgi paths not implemented");
+		respondtext(op, "501", "not implemented", "HEAD on scgi paths not implemented");
 		return;
 	}
 
 	if(req.method == POST && !req.h.has("content-length", nil)) {
-		respond(op, "400", "bad request", "POST needs a content-length");
+		respondtext(op, "400", "bad request", "POST needs a content-length");
 		return;
 	}
-	length := int req.h.get("content-length");
+	length := int req.h.find("content-length").t1;
 
 	chat(id, sprint("handling scgi request, scgipath %q scgiaddr %q", scgipath, scgiaddr));
 	scgichan <-= (scgiaddr, replychan := chan of (ref Sys->FD, string));
 	(sfd, serr) := <-replychan;
 	if(serr != nil) {
-		respond(op, "503", "internal server error", "internal server error");
+		respondtext(op, "503", "internal server error", "internal server error");
 		die(id, serr);
 	}
 
 	sreq := scgirequest(path, scgipath, req, op, length);
 	if(sys->write(sfd, sreq, len sreq) != len sreq) {
-		respond(op, "503", "internal server error", "internal server error");
+		respondtext(op, "503", "internal server error", "internal server error");
 		die(id, sprint("write scgi request: %r"));
 	}
 
@@ -446,13 +460,13 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 
 	sb := bufio->fopen(sfd, Bufio->OREAD);
 	if(sb == nil) {
-		respond(op, "503", "internal server error", "internal server error");
+		respondtext(op, "503", "internal server error", "internal server error");
 		die(id, sprint("bufio fopen scgi fd: %r"));
 	}
 
 	l := sb.gets('\n');
 	if(!str->prefix("Status: ", l)) {
-		respond(op, "503", "internal server error", "internal server error");
+		respondtext(op, "503", "internal server error", "internal server error");
 		die(id, "bad scgi response line: "+l);
 	}
 	l = l[len "Status: ":];
@@ -468,7 +482,7 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 
 	(hdrs, rerr) := Hdrs.read(sb);
 	if(rerr != nil) {
-		respond(op, "503", "internal server error", "internal server error");
+		respondtext(op, "503", "internal server error", "internal server error");
 		die(id, "reading scgi headers: "+rerr);
 	}
 	for(hl := hdrs.all(); hl != nil; hl = tl hl)
@@ -527,18 +541,18 @@ hwriteeof(op: Op)
 		fprint(op.fd, "0\r\n\r\n");
 }
 
-respond(op: Op, st, stmsg, errmsg: string)
+respond(op: Op, st, stmsg, errmsg: string, ct: string)
 {
 	resp := op.resp;
 	resp.st = st;
 	resp.stmsg = stmsg;
-	if(!resp.h.has("content-type", nil))
-		resp.h.add("content-type", "text/plain");
+	if(ct != nil)
+		resp.h.add("content-type", ct);
 	err := resp.write(op.fd);
 	if(err != nil)
 		die(op.id, "writing error response: "+err);
 
-	if(op.req == nil || op.req.method != HEAD) {
+	if(errmsg != nil && (op.req == nil || op.req.method != HEAD)) {
 		hwrite(op, array of byte errmsg);
 		hwriteeof(op);
 	}
@@ -546,9 +560,14 @@ respond(op: Op, st, stmsg, errmsg: string)
 	accesslog(op);
 }
 
+respondtext(op: Op, st, stmsg, errmsg: string)
+{
+	return respond(op, st, stmsg, errmsg, "text/plain");
+}
+
 etag(path: string, op: Op, dir: Sys->Dir): string
 {
-	host := op.req.h.get("host");
+	host := op.req.h.find("host").t1;
 	if(host == nil)
 		host = "_default";
 	return "\""+sha1(array of byte sprint("%d,%d,%s,%s,%s", dir.qid.vers, dir.mtime, host, op.lport, path))+"\"";
@@ -562,7 +581,7 @@ maxage(nil: string): string
 accesslog(op: Op)
 {
 	if(accessfd != nil && op.req != nil)
-		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.url.pack(), http->versionstr(op.req.version), op.resp.st, op.resp.stmsg, op.req.h.get("user-agent"));
+		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.url.pack(), http->versionstr(op.req.version), op.resp.st, op.resp.stmsg, op.req.h.find("user-agent").t1);
 }
 
 findscgi(path: string): (string, string)
@@ -632,7 +651,7 @@ pathurls(s: string): string
 
 scgirequest(path, scgipath: string, req: ref Req, op: Op, length: int): array of byte
 {
-	servername := req.h.get("host");
+	servername := req.h.find("host").t1;
 	if(servername == nil)
 		servername = op.lhost;
 	pathinfo := path[len scgipath:];
@@ -700,6 +719,39 @@ httpdate(t: int): string
 {
 	tm := daytime->gmt(t);
 	return sprint("%s, %02d %s %d %02d:%02d:%02d GMT", days[tm.wday], tm.mday, months[tm.mon], tm.year+1900, tm.hour, tm.min, tm.sec);
+}
+
+parsehttpdate(s: string): int
+{
+	mday, mon, year, hour, min, sec: int;
+
+	(n, tokens) := sys->tokenize(s, " ");
+	if(n != 6 || len hd tokens != 4 || (hd tokens)[3] != ',' || index(days, (hd tokens)[:3]) < 0)
+		return 0;
+	say("got a bit");
+	if((mon = index(months, hd tl tl tokens)) < 0)
+		return 0;
+	say("got a month");
+	(hn, htokens) := sys->tokenize(hd tl tl tl tl tokens, ":");
+	if(hn != 3)
+		return 0;
+	say("got time");
+	mday = int hd tl tokens;
+	year = int hd tl tl tl tokens;
+	hour = int hd htokens;
+	min = int hd tl htokens;
+	sec = int hd tl tl htokens;
+
+	# xxx last arg should be seconds offset for timezone
+	return daytime->tm2epoch(ref Daytime->Tm(sec, min, hour, mday, mon, year-1900, 0, 0, s[1:], 0));
+}
+
+index(a: array of string, s: string): int
+{
+	for(i := 0; i < len a; i++)
+		if(a[i] == s)
+			return i;
+	return -1;
 }
 
 readfileline(path: string, maxsize: int): (string, string)
