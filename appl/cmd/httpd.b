@@ -26,6 +26,8 @@ OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, CONNECT: import http;
 
 Op: adt {
 	id, now:	int;
+	chunked:	int;
+	fd:	ref Sys->FD;
 	rhost, rport, lhost, lport:	string;
 	req:	ref Req;
 	resp:	ref Resp;
@@ -204,7 +206,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		raise "sys-stat not okay";
 	say(sprint("current dir: %s", sdir.name));
 
-	op := Op(id, 0, rhost, rport, lhost, lport, nil, nil);
+	op := Op(id, 0, 0, fd, rhost, rport, lhost, lport, nil, nil);
 
 	sys->pctl(Sys->NEWPGRP, nil);
 	if(exc->setexcmode(Exception->NOTIFYLEADER) != 0)
@@ -235,7 +237,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		if(rerr != nil) {
 			hdrs.add("connection", "close");
 			op.resp = ref Resp(HTTP_10, nil, nil, hdrs);
-			respond(0, fd, op, "400", "bad request", "bad request: "+rerr);
+			respond(op, "400", "bad request", "bad request: "+rerr);
 			die(id, "reading request: "+rerr);
 		}
 		chat(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), http->versionstr(req.version)));
@@ -244,10 +246,10 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		# xxx host present for http/1.1 (or full url as path)
 
 		http11 := req.version == HTTP_11;
-		chunked := http11 && !req.h.has("connection", "close");
-		keepalive = chunked;
+		op.chunked = http11 && !req.h.has("connection", "close");
+		keepalive = op.chunked;
 
-		if(chunked && keepalive) {
+		if(op.chunked && keepalive) {
 			hdrs.add("transfer-encoding", "chunked");
 			hdrs.add("connection", "keep-alive");
 		} else {
@@ -260,21 +262,21 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			;
 		TRACE =>
 			hdrs.add("content-type", "message/http");
-			respond(chunked, fd, op, "200", "OK", req.pack());
+			respond(op, "200", "OK", req.pack());
 			continue;
 
 		OPTIONS =>
 			# xxx should be based on path
 			hdrs.add("allow", "OPTIONS, GET, HEAD, POST, TRACE");
-			respond(chunked, fd, op, "200", "OK", "");
+			respond(op, "200", "OK", "");
 			continue;
 
 		PUT or DELETE =>
-			respond(chunked, fd, op, "501", "not implemented", "method not implemented");
+			respond(op, "501", "not implemented", "method not implemented");
 			continue;
 
 		* =>
-			respond(chunked, fd, op, "400", "bad request", "unknown method");
+			respond(op, "501", "not implemented", "unknown method");
 			return;
 		}
 
@@ -288,52 +290,52 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			(hostdir, nil) = str->splitstrl(hostdir, ":");
 			if(str->drop(hostdir, "0-9a-zA-Z.-") != nil || str->splitstrl(hostdir, "..").t1 != nil) {
 				chat(id, "bad host in header");
-				respond(chunked, fd, op, "404", "file not found", "object not found: "+path);
+				respond(op, "404", "file not found", "object not found: "+path);
 				continue;
 			}
 		}
 		if(hflag && sys->chdir(hostdir) != 0) {
 			hostdir = "_default";
 			if(havehost && sys->chdir(hostdir) != 0) {
-				respond(chunked, fd, op, "404", "file not found", "object not found: "+path);
+				respond(op, "404", "file not found", "object not found: "+path);
 				continue;
 			}
 		}
 
 		if(((scgipath, scgiaddr) := findscgi(path)).t1 != nil) {
-			scgi(chunked, fd, path, op, scgipath, scgiaddr);
+			scgi(path, op, scgipath, scgiaddr);
 			continue;
 		}
 
 		dfd := sys->open("."+path, Sys->OREAD);
 		if(dfd == nil || ((nil, dir) := sys->fstat(dfd)).t0 != 0 || (dir.mode&Sys->DMDIR) && (!lflag || path != nil && path[len path-1] != '/')) {
 			chat(id, "file not found");
-			respond(chunked, fd, op, "404", "file not found", "object not found: "+path);
+			respond(op, "404", "file not found", "object not found: "+path);
 			continue;
 		}
 
 		accesslog(op);
 
 		if(dir.mode & Sys->DMDIR)
-			listdir(chunked, fd, path, op, dfd);
+			listdir(path, op, dfd);
 		else
-			plainfile(chunked, fd, path, op, dfd);
+			plainfile(path, op, dfd);
 	}
 }
 
-plainfile(chunked: int, fd: ref Sys->FD, path: string, op: Op, dfd: ref Sys->FD)
+plainfile(path: string, op: Op, dfd: ref Sys->FD)
 {
 	id := op.id;
 	resp := op.resp;
 
 	if(op.req.method == POST) {
-		respond(chunked, fd, op, "405", "method not allowed", "POST not allowed on files");
+		respond(op, "405", "method not allowed", "POST not allowed on files");
 		return;
 	}
 
 	chat(id, "doing plain file");
 	resp.h.add("content-type", gettype(path));
-	rerr := resp.write(fd);
+	rerr := resp.write(op.fd);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
 
@@ -346,24 +348,24 @@ plainfile(chunked: int, fd: ref Sys->FD, path: string, op: Op, dfd: ref Sys->FD)
 			die(id, sprint("reading file: %r"));
 		if(n == 0)
 			break;
-		hwrite(chunked, fd, d[:n]);
+		hwrite(op, d[:n]);
 	}
-	hwriteeof(chunked, fd);
+	hwriteeof(op);
 }
 
-listdir(chunked: int, fd: ref Sys->FD, path: string, op: Op, dfd: ref Sys->FD)
+listdir(path: string, op: Op, dfd: ref Sys->FD)
 {
 	id := op.id;
 	resp := op.resp;
 
 	if(op.req.method == POST) {
-		respond(chunked, fd, op, "405", "method not allowed", "POST not allowed on directories");
+		respond(op, "405", "method not allowed", "POST not allowed on directories");
 		return;
 	}
 
 	chat(id, "doing directory listing");
 	resp.h.add("content-type", "text/html");
-	rerr := resp.write(fd);
+	rerr := resp.write(op.fd);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
 
@@ -371,7 +373,7 @@ listdir(chunked: int, fd: ref Sys->FD, path: string, op: Op, dfd: ref Sys->FD)
 		return;
 
 	begin := sprint("<html><head><style type=\"text/css\">h1 { font-size: 1.4em; } td, th { padding-left: 1em; padding-right: 1em; } td.mtime, td.size { text-align: right; }</style><title>listing for %s</title></head><body><h1>listing for %s</h1><hr/><table><tr><th>last modified</th><th>size</th><th>name</th></tr>\n", path, pathurls(path));
-	hwrite(chunked, fd, array of byte begin);
+	hwrite(op, array of byte begin);
 	for(;;) {
 		(nd, d) := sys->dirread(dfd);
 		if(nd < 0)
@@ -385,26 +387,26 @@ listdir(chunked: int, fd: ref Sys->FD, path: string, op: Op, dfd: ref Sys->FD)
 				name += "/";
 			html += sprint("<tr><td class=\"mtime\">%s</td><td class=\"size\">%bd</td><td class=\"name\"><a href=\"%s\">%s</a></td></tr>\n", daytime->filet(op.now, d[i].mtime), d[i].length, htmlescape(encodepath(name)), htmlescape(name));
 		}
-		hwrite(chunked, fd, array of byte html);
+		hwrite(op, array of byte html);
 	}
 	end := sprint("</table><hr/></body></html>\n");
-	hwrite(chunked, fd, array of byte end);
-	hwriteeof(chunked, fd);
+	hwrite(op, array of byte end);
+	hwriteeof(op);
 }
 
-scgi(chunked: int, fd: ref Sys->FD, path: string, op: Op, scgipath, scgiaddr: string)
+scgi(path: string, op: Op, scgipath, scgiaddr: string)
 {
 	id := op.id;
 	req := op.req;
 	resp := op.resp;
 
 	if(req.method == HEAD) {
-		respond(chunked, fd, op, "501", "not implemented", "HEAD on scgi paths not implemented");
+		respond(op, "501", "not implemented", "HEAD on scgi paths not implemented");
 		return;
 	}
 
 	if(req.method == POST && !req.h.has("content-length", nil)) {
-		respond(chunked, fd, op, "400", "bad request", "POST needs a content-length");
+		respond(op, "400", "bad request", "POST needs a content-length");
 		return;
 	}
 	length := int req.h.get("content-length");
@@ -413,28 +415,28 @@ scgi(chunked: int, fd: ref Sys->FD, path: string, op: Op, scgipath, scgiaddr: st
 	scgichan <-= (scgiaddr, replychan := chan of (ref Sys->FD, string));
 	(sfd, serr) := <-replychan;
 	if(serr != nil) {
-		respond(chunked, fd, op, "503", "internal server error", "internal server error");
+		respond(op, "503", "internal server error", "internal server error");
 		die(id, serr);
 	}
 
 	sreq := scgirequest(path, scgipath, req, op, length);
 	if(sys->write(sfd, sreq, len sreq) != len sreq) {
-		respond(chunked, fd, op, "503", "internal server error", "internal server error");
+		respond(op, "503", "internal server error", "internal server error");
 		die(id, sprint("write scgi request: %r"));
 	}
 
 	if(length > 0)
-		spawn scgifunnel(fd, sfd, length);
+		spawn scgifunnel(op.fd, sfd, length);
 
 	sb := bufio->fopen(sfd, Bufio->OREAD);
 	if(sb == nil) {
-		respond(chunked, fd, op, "503", "internal server error", "internal server error");
+		respond(op, "503", "internal server error", "internal server error");
 		die(id, sprint("bufio fopen scgi fd: %r"));
 	}
 
 	l := sb.gets('\n');
 	if(!str->prefix("Status: ", l)) {
-		respond(chunked, fd, op, "503", "internal server error", "internal server error");
+		respond(op, "503", "internal server error", "internal server error");
 		die(id, "bad scgi response line: "+l);
 	}
 	l = l[len "Status: ":];
@@ -450,13 +452,13 @@ scgi(chunked: int, fd: ref Sys->FD, path: string, op: Op, scgipath, scgiaddr: st
 
 	(hdrs, rerr) := Hdrs.read(sb);
 	if(rerr != nil) {
-		respond(chunked, fd, op, "503", "internal server error", "internal server error");
+		respond(op, "503", "internal server error", "internal server error");
 		die(id, "reading scgi headers: "+rerr);
 	}
 	for(hl := hdrs.all(); hl != nil; hl = tl hl)
 		resp.h.add((hd hl).t0, (hd hl).t1);
 
-	rerr = resp.write(fd);
+	rerr = resp.write(op.fd);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
 
@@ -466,9 +468,9 @@ scgi(chunked: int, fd: ref Sys->FD, path: string, op: Op, scgipath, scgiaddr: st
 			die(id, sprint("reading file: %r"));
 		if(n == 0)
 			break;
-		hwrite(chunked, fd, d[:n]);
+		hwrite(op, d[:n]);
 	}
-	hwriteeof(chunked, fd);
+	hwriteeof(op);
 	chat(id, "request done");
 }
 
@@ -486,12 +488,12 @@ scgifunnel(fd, sfd: ref Sys->FD, length: int)
 	}
 }
 
-hwrite(chunked: int, fd: ref Sys->FD, d: array of byte)
+hwrite(op: Op, d: array of byte)
 {
 	if(len d == 0)
 		return;
 
-	if(chunked) {
+	if(op.chunked) {
 		length := array of byte sprint("%x\r\n", len d);
 		nd := array[len length+len d+2] of byte;
 		nd[:] = length;
@@ -499,30 +501,30 @@ hwrite(chunked: int, fd: ref Sys->FD, d: array of byte)
 		nd[len length+len d:] = array of byte "\r\n";
 		d = nd;
 	}
-	if(sys->write(fd, d, len d) != len d)
+	if(sys->write(op.fd, d, len d) != len d)
 		fail(sprint("writing response: %r"));
 }
 
-hwriteeof(chunked: int, fd: ref Sys->FD)
+hwriteeof(op: Op)
 {
-	if(chunked)
-		fprint(fd, "0\r\n\r\n");
+	if(op.chunked)
+		fprint(op.fd, "0\r\n\r\n");
 }
 
-respond(chunked: int, fd: ref Sys->FD, op: Op, st, stmsg, errmsg: string)
+respond(op: Op, st, stmsg, errmsg: string)
 {
 	resp := op.resp;
 	resp.st = st;
 	resp.stmsg = stmsg;
 	if(!resp.h.has("content-type", nil))
 		resp.h.add("content-type", "text/plain");
-	err := resp.write(fd);
+	err := resp.write(op.fd);
 	if(err != nil)
 		die(op.id, "writing error response: "+err);
 
 	if(op.req == nil || op.req.method != HEAD) {
-		hwrite(chunked, fd, array of byte errmsg);
-		hwriteeof(chunked, fd);
+		hwrite(op, array of byte errmsg);
+		hwriteeof(op);
 	}
 
 	accesslog(op);
