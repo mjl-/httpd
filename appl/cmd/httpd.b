@@ -235,7 +235,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			break;
 
 		op.now = readtime();
-		hdrs := Hdrs.new(("date", httpdate(op.now))::("server", "inferno-httpd/0")::nil);
+		hdrs := Hdrs.new(("date", httpdate(op.now))::("server", "nhttpd/0")::nil);
 
 		(req, rerr) := Req.read(b);
 		if(rerr != nil) {
@@ -332,6 +332,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
 {
 	id := op.id;
+	req := op.req;
 	resp := op.resp;
 
 	if(op.req.method == POST) {
@@ -342,15 +343,22 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
 
 	chat(id, "doing plain file");
 	resp.h.add("last-modified", httpdate(dir.mtime));
-	resp.h.add("etag", etag(path, op, dir));
+	tag := etag(path, op, dir);
+	resp.h.add("etag", tag);
 
-	ifunmodsince := parsehttpdate(op.req.h.find("if-unmodified-since").t1);
+	ifmatch := req.h.find("if-match").t1;
+	if(ifmatch != nil && !(ifmatch == "*" || ifmatch == tag && !str->prefix("W/", tag))) {
+		respond(op, "412", "precondition failed", nil, nil);
+		return;
+	}
+
+	ifunmodsince := parsehttpdate(req.h.find("if-unmodified-since").t1);
 	chat(id, sprint("ifunmodsince, %d", ifunmodsince));
 	if(ifunmodsince && dir.mtime > ifunmodsince) {
 		respond(op, "412", "precondition failed", nil, nil);
 		return;
 	}
-	ifmodsince := parsehttpdate(op.req.h.find("if-modified-since").t1);
+	ifmodsince := parsehttpdate(req.h.find("if-modified-since").t1);
 	chat(id, sprint("ifmodsince, %d", ifmodsince));
 	if(ifmodsince && dir.mtime < ifmodsince) {
 		respond(op, "304", "not modified", nil, nil);
@@ -364,7 +372,7 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
 
-	if(op.req.method == HEAD)
+	if(req.method == HEAD)
 		return;
 
 	for(;;) {
