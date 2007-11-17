@@ -9,13 +9,17 @@ features:
 - html directory listings
 
 todo:
+- if-range
+- headers: expect
+- allow index.html, index.txt and such as index files
 - don't use chunked for plain file or dir listing, use content-length instead.  set content-length for head as well.  should scgi response be done non-chunked if it sets its content-length?
-- conditionals: if-match, if-none-match, if-range.  if-(un)?modified-since for non-get non-plainfile.
-- range/content-range, if-range
-- headers: expect, accept-*, many more
 - timeouts on keep-alive connections
 - cache times based on other heuristics?  or by config?
 - move to config file?
+- headers: accept-*, more
+
+- can etags contain comma's?
+- etags: is a client allowed to prepend a W/ to an etag?  should we consider the weak tag to match the strong tag?
 
 - what to do for "complex" requests on (s)cgi, such as with range header.  is cgi supposed to handle HEAD by itself?
 - transparent compression?
