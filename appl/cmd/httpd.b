@@ -276,6 +276,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			continue;
 
 		PUT or DELETE =>
+			# note: when implementing these, complete support for if-match and if-none-match
 			respondtext(op, "501", "not implemented", "method not implemented");
 			continue;
 
@@ -347,23 +348,22 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
 	resp.h.add("etag", tag);
 
 	ifmatch := req.h.find("if-match").t1;
-	if(ifmatch != nil && !(ifmatch == "*" || ifmatch == tag && !str->prefix("W/", tag))) {
-		respond(op, "412", "precondition failed", nil, nil);
-		return;
-	}
+	if(ifmatch != nil && !etagmatch(tag, ifmatch, 1))
+		return respond(op, "412", "precondition failed", nil, nil);
+
+	ifmodsince := parsehttpdate(req.h.find("if-modified-since").t1);
+	chat(id, sprint("ifmodsince, %d", ifmodsince));
+	if(ifmodsince && dir.mtime < ifmodsince)
+		return respond(op, "304", "not modified", nil, nil);
+
+	ifnonematch := req.h.find("if-none-match").t1;
+	if(ifnonematch != nil && etagmatch(tag, ifnonematch, 0))
+		return respond(op, "412", "precondition failed", nil, nil);
 
 	ifunmodsince := parsehttpdate(req.h.find("if-unmodified-since").t1);
 	chat(id, sprint("ifunmodsince, %d", ifunmodsince));
-	if(ifunmodsince && dir.mtime > ifunmodsince) {
-		respond(op, "412", "precondition failed", nil, nil);
-		return;
-	}
-	ifmodsince := parsehttpdate(req.h.find("if-modified-since").t1);
-	chat(id, sprint("ifmodsince, %d", ifmodsince));
-	if(ifmodsince && dir.mtime < ifmodsince) {
-		respond(op, "304", "not modified", nil, nil);
-		return;
-	}
+	if(ifunmodsince && dir.mtime >= ifunmodsince)
+		return respond(op, "412", "precondition failed", nil, nil);
 
 	resp.h.add("content-type", gettype(path));
 	if(cflag)
@@ -752,6 +752,30 @@ parsehttpdate(s: string): int
 
 	# xxx last arg should be seconds offset for timezone
 	return daytime->tm2epoch(ref Daytime->Tm(sec, min, hour, mday, mon, year-1900, 0, 0, s[1:], 0));
+}
+
+etagmatch(etag: string, etagstr: string, strong: int): int
+{
+	if(etagstr == "*")
+		return 1;
+	for(l := sys->tokenize(etagstr, ",").t1; l != nil; l = tl l) {
+		t := strip(hd l, " \t");
+		if(t == etag && (!strong || !str->prefix("W/", t)))
+			return 1;
+	}
+	return 0;
+}
+
+strip(s, cl: string): string
+{
+	return droptl(str->drop(s, cl), cl);
+}
+
+droptl(s, cl: string): string
+{
+	while(s != nil && str->in(s[len s-1], cl))
+		s = s[:len s-1];
+	return s;
 }
 
 index(a: array of string, s: string): int
