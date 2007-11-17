@@ -11,6 +11,7 @@ include "env.m";
 include "string.m";
 include "exception.m";
 include "keyring.m";
+include "security.m";
 include "mhttp.m";
 
 sys: Sys;
@@ -18,6 +19,7 @@ daytime: Daytime;
 env: Env;
 exc: Exception;
 keyring: Keyring;
+random: Random;
 str: String;
 http: Http;
 
@@ -96,6 +98,7 @@ init(nil: ref Draw->Context, args: list of string)
 	daytime = load Daytime Daytime->PATH;
 	keyring = load Keyring Keyring->PATH;
 	exc = load Exception Exception->PATH;
+	random = load Random Random->PATH;
 	str = load String String->PATH;
 	http = load Http Http->PATH;
 	http->init(bufio);
@@ -352,23 +355,43 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		if(cflag)
 			resp.h.add("cache-control", maxage(path));
 
-		accesslog(op);
-
 		if(dir.mode & Sys->DMDIR)
 			listdir(path, op, dfd);
 		else
-			plainfile(path, op, dfd);
+			plainfile(path, op, dfd, dir);
 	}
 }
 
-plainfile(path: string, op: Op, dfd: ref Sys->FD)
+plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
 {
 	id := op.id;
 	req := op.req;
 	resp := op.resp;
 
 	chat(id, "doing plain file");
-	resp.h.add("content-type", gettype(path));
+	ct := gettype(path);
+	resp.h.add("content-type", ct);
+
+	(valid, ranges) := parserange(req.h.find("range").t1, dir);
+	if(!valid) {
+		resp.h.add("content-range", sprint("bytes */%bd", dir.length));
+		return respond(op, "416", "requested range not satisfiable", nil, nil);
+	}
+	bound := "";
+	if(ranges != nil) {
+		if(len ranges == 1) {
+			(start, end) := hd ranges;
+			resp.h.add("content-range", sprint("bytes %bd-%bd/%bd", start, end-big 1, dir.length));
+		} else {
+			bound = sha1(array of byte (string random->randomint(Random->NotQuiteRandom)+","+string op.now));
+			resp.h.set("content-type", "multipart/byteranges; boundary="+bound);
+		}
+		resp.st = "206";
+		resp.stmsg = "partial content";
+	} else
+		ranges = (big 0, dir.length)::nil;
+
+	accesslog(op);
 
 	rerr := resp.write(op.fd);
 	if(rerr != nil)
@@ -377,13 +400,24 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD)
 	if(req.method == HEAD)
 		return;
 
-	for(;;) {
-		n := sys->read(dfd, d := array[Sys->ATOMICIO] of byte, len d);
-		if(n < 0)
-			die(id, sprint("reading file: %r"));
-		if(n == 0)
-			break;
-		hwrite(op, d[:n]);
+	for(; ranges != nil; ranges = tl ranges) {
+		(off, end) := hd ranges;
+		if(bound != nil)
+			hwrite(op, array of byte sprint("--%s\r\ncontent-type: %s\r\ncontent-range: bytes %bd-%bd/%bd\r\n\r\n", bound, ct, off, end-big 1, dir.length));
+		while(off < end) {
+			want := int (end-off);
+			if(want > Sys->ATOMICIO)
+				want = Sys->ATOMICIO;
+			n := sys->pread(dfd, d := array[want] of byte, len d, off);
+			if(n < 0)
+				die(id, sprint("reading file: %r"));
+			if(n == 0)
+				break;
+			off += big n;
+			hwrite(op, d[:n]);
+		}
+		if(bound != nil)
+			hwrite(op, array of byte "\r\n");
 	}
 	hwriteeof(op);
 }
@@ -395,6 +429,8 @@ listdir(path: string, op: Op, dfd: ref Sys->FD)
 
 	chat(id, "doing directory listing");
 	resp.h.add("content-type", "text/html");
+
+	accesslog(op);
 
 	rerr := resp.write(op.fd);
 	if(rerr != nil)
@@ -747,6 +783,56 @@ parsehttpdate(s: string): int
 	return daytime->tm2epoch(ref Daytime->Tm(sec, min, hour, mday, mon, year-1900, 0, 0, s[1:], 0));
 }
 
+parserange(range: string, dir: Sys->Dir): (int, list of (big, big))
+{
+	if(range == nil)
+		return (1, nil);
+
+	if(!str->prefix("bytes=", range))
+		return (0, nil);
+	range = range[len "bytes=":];
+	r: list of (big, big);
+	valid := 0;
+	for(l := sys->tokenize(range, ",").t1; l != nil; l = tl l) {
+		s := hd l;
+		if(s == nil)
+			return (1, nil);
+		if(s[0] == '-') {
+			# single (negative) byte offset relative to end of file
+			s = s[1:];
+			if(s == nil || str->drop(s, "0-9") != nil)
+				return (1, nil);
+			if(big s != big 0)
+				valid = 1;
+			i := dir.length - big s;
+			if(i < big 0)
+				i = big 0;
+			if(i >= dir.length)
+				i = dir.length - big 1;
+			chat(0, sprint("adding single, (%bd, %bd)", i, dir.length));
+			r = (i, dir.length)::r;
+		} else {
+			(first, last) := str->splitstrl(s, "-");
+			if(str->drop(first, "0-9") != nil || last == nil || str->drop(last[1:], "0-9") != nil)
+				return (1, nil);
+			f := big first;
+			e := dir.length;
+			last = last[1:];
+			if(last != nil)
+				e = big last+big 1;
+			if(e > dir.length)
+				e = dir.length;
+			if(f > e)
+				return (1, nil);
+			if(f < dir.length)
+				valid = 1;
+			r = (f, e)::r;
+			chat(0, sprint("adding two, (%bd, %bd)", f, e));
+		}
+	}
+	return (valid, rev1(r));
+}
+
 etagmatch(etag: string, etagstr: string, strong: int): int
 {
 	if(etagstr == "*")
@@ -822,6 +908,14 @@ has(s: string, c: int): int
 		if(s[i] == c)
 			return 1;
 	return 0;
+}
+
+rev1(l: list of (big, big)): list of (big, big)
+{
+	r: list of (big, big);
+	for(; l != nil; l = tl l)
+		r = hd l::r;
+	return r;
 }
 
 rev[T](l: list of T): list of T
