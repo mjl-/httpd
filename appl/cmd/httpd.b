@@ -259,7 +259,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		} else {
 			hdrs.add("connection", "close");
 		}
-		op.resp = ref Resp(req.version, "200", "OK", hdrs);
+		op.resp = resp := ref Resp(req.version, "200", "OK", hdrs);
 
 		case req.method {
 		GET or HEAD or POST =>
@@ -321,53 +321,55 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			continue;
 		}
 
+		if(req.method == POST) {
+			resp.h.add("allow", "GET, HEAD, OPTIONS");
+			respondtext(op, "405", "method not allowed", "POST not allowed");
+			return;
+		}
+
+		resp.h.add("last-modified", httpdate(dir.mtime));
+		tag := etag(path, op, dir);
+		resp.h.add("etag", tag);
+
+		ifmatch := req.h.find("if-match").t1;
+		if(ifmatch != nil && !etagmatch(tag, ifmatch, 1))
+			return respond(op, "412", "precondition failed", nil, nil);
+
+		ifmodsince := parsehttpdate(req.h.find("if-modified-since").t1);
+		chat(id, sprint("ifmodsince, %d, mtime %d", ifmodsince, dir.mtime));
+		if(ifmodsince && dir.mtime <= ifmodsince)
+			return respond(op, "304", "not modified", nil, nil);
+
+		ifnonematch := req.h.find("if-none-match").t1;
+		if(ifnonematch != nil && req.method != HEAD && req.method != GET && etagmatch(tag, ifnonematch, 0))
+			return respond(op, "412", "precondition failed", nil, nil);
+
+		ifunmodsince := parsehttpdate(req.h.find("if-unmodified-since").t1);
+		chat(id, sprint("ifunmodsince, %d", ifunmodsince));
+		if(ifunmodsince && dir.mtime > ifunmodsince)
+			return respond(op, "412", "precondition failed", nil, nil);
+
+		if(cflag)
+			resp.h.add("cache-control", maxage(path));
+
 		accesslog(op);
 
 		if(dir.mode & Sys->DMDIR)
-			listdir(path, op, dfd, dir);
+			listdir(path, op, dfd);
 		else
-			plainfile(path, op, dfd, dir);
+			plainfile(path, op, dfd);
 	}
 }
 
-plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
+plainfile(path: string, op: Op, dfd: ref Sys->FD)
 {
 	id := op.id;
 	req := op.req;
 	resp := op.resp;
 
-	if(op.req.method == POST) {
-		resp.h.add("allow", "GET, HEAD, OPTIONS");
-		respondtext(op, "405", "method not allowed", "POST not allowed on files");
-		return;
-	}
-
 	chat(id, "doing plain file");
-	resp.h.add("last-modified", httpdate(dir.mtime));
-	tag := etag(path, op, dir);
-	resp.h.add("etag", tag);
-
-	ifmatch := req.h.find("if-match").t1;
-	if(ifmatch != nil && !etagmatch(tag, ifmatch, 1))
-		return respond(op, "412", "precondition failed", nil, nil);
-
-	ifmodsince := parsehttpdate(req.h.find("if-modified-since").t1);
-	chat(id, sprint("ifmodsince, %d", ifmodsince));
-	if(ifmodsince && dir.mtime < ifmodsince)
-		return respond(op, "304", "not modified", nil, nil);
-
-	ifnonematch := req.h.find("if-none-match").t1;
-	if(ifnonematch != nil && etagmatch(tag, ifnonematch, 0))
-		return respond(op, "412", "precondition failed", nil, nil);
-
-	ifunmodsince := parsehttpdate(req.h.find("if-unmodified-since").t1);
-	chat(id, sprint("ifunmodsince, %d", ifunmodsince));
-	if(ifunmodsince && dir.mtime >= ifunmodsince)
-		return respond(op, "412", "precondition failed", nil, nil);
-
 	resp.h.add("content-type", gettype(path));
-	if(cflag)
-		resp.h.add("cache-control", maxage(path));
+
 	rerr := resp.write(op.fd);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
@@ -386,23 +388,14 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
 	hwriteeof(op);
 }
 
-listdir(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
+listdir(path: string, op: Op, dfd: ref Sys->FD)
 {
 	id := op.id;
 	resp := op.resp;
 
-	if(op.req.method == POST) {
-		resp.h.add("allow", "GET, HEAD, OPTIONS");
-		respondtext(op, "405", "method not allowed", "POST not allowed on directories");
-		return;
-	}
-
 	chat(id, "doing directory listing");
 	resp.h.add("content-type", "text/html");
-	resp.h.add("last-modified", httpdate(dir.mtime));
-	resp.h.add("etag", etag(path, op, dir));
-	if(cflag)
-		resp.h.add("cache-control", maxage(path));
+
 	rerr := resp.write(op.fd);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
