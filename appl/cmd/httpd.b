@@ -31,6 +31,7 @@ prefix: import str;
 
 Op: adt {
 	id, now:	int;
+	keepalive:	int;
 	chunked:	int;
 	fd:	ref Sys->FD;
 	rhost, rport, lhost, lport:	string;
@@ -232,7 +233,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		raise "sys-stat not okay";
 	say(sprint("current dir: %s", sdir.name));
 
-	op := Op(id, 0, 0, fd, rhost, rport, lhost, lport, nil, nil);
+	op := Op(id, 0, 0, 0, fd, rhost, rport, lhost, lport, nil, nil);
 
 	sys->pctl(Sys->NEWPGRP, nil);
 	if(exc->setexcmode(Exception->NOTIFYLEADER) != 0)
@@ -271,16 +272,8 @@ httpserve(fd: ref Sys->FD, conndir: string)
 
 		# xxx host present for http/1.1 (or full url as path)
 
-		http11 := req.version == HTTP_11;
-		op.chunked = http11 && !req.h.has("connection", "close");
-		keepalive = op.chunked;
+		op.keepalive = keepalive = req.version == HTTP_11 && !req.h.has("connection", "close");
 
-		if(op.chunked && keepalive) {
-			hdrs.add("transfer-encoding", "chunked");
-			hdrs.add("connection", "keep-alive");
-		} else {
-			hdrs.add("connection", "close");
-		}
 		op.resp = resp := ref Resp(req.version, "200", "OK", hdrs);
 
 		case req.method {
@@ -405,6 +398,7 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string)
 	chat(id, "doing plain file");
 	ct := gettype(path);
 	resp.h.add("content-type", ct);
+	resp.h.add("content-length", string dir.length);
 
 	(valid, ranges) := parserange(req.h.find("range").t1, dir);
 	if(!valid) {
@@ -422,6 +416,7 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string)
 		} else {
 			bound = sha1(array of byte (string <-randch+","+string op.now));
 			resp.h.set("content-type", "multipart/byteranges; boundary="+bound);
+			op.chunked = op.keepalive;
 		}
 		resp.st = "206";
 		resp.stmsg = "partial content";
@@ -430,7 +425,7 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string)
 
 	accesslog(op);
 
-	rerr := resp.write(op.fd);
+	rerr := hresp(resp, op.fd, op.keepalive, op.chunked);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
 
@@ -466,10 +461,11 @@ listdir(path: string, op: Op, dfd: ref Sys->FD)
 
 	chat(id, "doing directory listing");
 	resp.h.add("content-type", "text/html");
+	op.chunked = op.keepalive;
 
 	accesslog(op);
 
-	rerr := resp.write(op.fd);
+	rerr := hresp(resp, op.fd, op.keepalive, op.chunked);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
 
@@ -545,11 +541,11 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 	}
 
 	l := sb.gets('\n');
-	if(!str->prefix("Status: ", l)) {
+	if(!prefix("status: ", str->tolower(l))) {
 		respondtext(op, "503", "internal server error", "internal server error");
 		die(id, "bad scgi response line: "+l);
 	}
-	l = l[len "Status: ":];
+	l = l[len "status: ":];
 	(st, stmsg) := str->splitstrl(l, " ");
 	if(stmsg != nil)
 		stmsg = stmsg[1:];
@@ -568,7 +564,8 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 	for(hl := hdrs.all(); hl != nil; hl = tl hl)
 		resp.h.add((hd hl).t0, (hd hl).t1);
 
-	rerr = resp.write(op.fd);
+	op.chunked = op.keepalive;	# xxx check whether content-length has been set?
+	rerr = hresp(resp, op.fd, op.keepalive, op.chunked);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
 
@@ -598,6 +595,19 @@ scgifunnel(fd, sfd: ref Sys->FD, length: int)
 	}
 }
 
+hresp(resp: ref Resp, fd: ref Sys->FD, keepalive, chunked: int): string
+{
+	if(keepalive)
+		resp.h.add("connection", "keep-alive");
+	else
+		resp.h.add("connection", "close");
+	if(chunked) {
+		resp.h.add("transfer-encoding", "chunked");
+		resp.h.del("content-length", nil);
+	}
+	return resp.write(fd);
+}
+
 hwrite(op: Op, d: array of byte)
 {
 	if(len d == 0)
@@ -621,19 +631,24 @@ hwriteeof(op: Op)
 		fprint(op.fd, "0\r\n\r\n");
 }
 
-respond(op: Op, st, stmsg, errmsg: string, ct: string)
+respond(op: Op, st, stmsg, errmsgstr: string, ct: string)
 {
 	resp := op.resp;
 	resp.st = st;
 	resp.stmsg = stmsg;
 	if(ct != nil)
 		resp.h.add("content-type", ct);
-	err := resp.write(op.fd);
+
+	op.chunked = 0;
+	errmsg := array of byte errmsgstr;
+	resp.h.add("content-length", string len errmsg);
+
+	err := hresp(resp, op.fd, op.keepalive, op.chunked);
 	if(err != nil)
 		die(op.id, "writing error response: "+err);
 
-	if(errmsg != nil && (op.req == nil || op.req.method != HEAD)) {
-		hwrite(op, array of byte errmsg);
+	if(errmsgstr != nil && (op.req == nil || op.req.method != HEAD)) {
+		hwrite(op, errmsg);
 		hwriteeof(op);
 	}
 
