@@ -45,6 +45,7 @@ addr := "net!localhost!8000";
 webroot := "";
 environment: list of (string, string);
 indexfiles: list of string;
+redirs: list of (string, string);
 
 Httpd: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -111,7 +112,7 @@ init(nil: ref Draw->Context, args: list of string)
 	http->init(bufio);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-dhl] [-a addr] [-c cachesecs] [-i indexfile] [-s path addr] [-t extention mimetype] webroot");
+	arg->setusage(arg->progname()+" [-dhl] [-a addr] [-c cachesecs] [-i indexfile] [-r orig new] [-s path addr] [-t extention mimetype] webroot");
 	while((c := arg->opt()) != 0)
 		case c {
 		'a' =>	addr = arg->earg();
@@ -121,11 +122,9 @@ init(nil: ref Draw->Context, args: list of string)
 		'i' =>	indexfiles = arg->earg()::indexfiles;
 		'l' =>	lflag++;
 			http->debug = 1;
-		's' =>	spath := arg->earg();
-			saddr := arg->earg();
-			scgipaths = (spath, saddr)::scgipaths;
-		't' =>	extension := arg->earg();
-			mimetype := arg->earg();
+		'r' =>	redirs = (arg->earg(), arg->earg())::redirs;
+		's' =>	scgipaths = (arg->earg(), arg->earg())::scgipaths;
+		't' =>	(extension, mimetype) := (arg->earg(), arg->earg());
 			ntypes := array[len types+1] of (string, string);
 			ntypes[0] = (extension, mimetype);
 			ntypes[1:] = types;
@@ -137,6 +136,7 @@ init(nil: ref Draw->Context, args: list of string)
 		arg->usage();
 	webroot = hd args;
 	indexfiles = rev(indexfiles);
+	redirs = rev2(redirs);
 
 	environment = env->getall();
 
@@ -274,6 +274,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		die(id, sprint("bufio open: %r"));
 
 	keepalive := 0;
+request:
 	for(nsrvs := 0; ; nsrvs++) {
 		if(nsrvs > 0 && !keepalive)
 			break;
@@ -347,6 +348,15 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			if(havehost && sys->chdir(hostdir) != 0) {
 				respondtext(op, "404", "file not found", "object not found: "+path);
 				continue;
+			}
+		}
+
+		for(r := redirs; r != nil; r = tl r) {
+			(orig, new) := hd r;
+			if(orig == path) {
+				resp.h.set("location", new);
+				respond(op, "301", "moved permanently", nil, nil);
+				continue request;
 			}
 		}
 
@@ -992,6 +1002,14 @@ has(s: string, c: int): int
 		if(s[i] == c)
 			return 1;
 	return 0;
+}
+
+rev2(l: list of (string, string)): list of (string, string)
+{
+	r: list of (string, string);
+	for(; l != nil; l = tl l)
+		r = hd l::r;
+	return r;
 }
 
 rev1(l: list of (big, big)): list of (big, big)
