@@ -42,6 +42,7 @@ cflag, dflag, hflag, lflag: int;
 addr := "net!localhost!8000";
 webroot := "";
 environment: list of (string, string);
+indexfiles: list of string;
 
 Httpd: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -106,24 +107,32 @@ init(nil: ref Draw->Context, args: list of string)
 	http->init(bufio);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-a addr] [-cdhl] [-s path addr] webroot");
+	arg->setusage(arg->progname()+" [-a addr] [-cdhl] [-i indexfile] [-s path addr] [-t extention mimetype] webroot");
 	while((c := arg->opt()) != 0)
 		case c {
 		'a' =>	addr = arg->earg();
 		'c' =>	cflag++;
 		'd' =>	dflag++;
 		'h' =>	hflag++;
+		'i' =>	indexfiles = arg->earg()::indexfiles;
 		'l' =>	lflag++;
 			http->debug = 1;
 		's' =>	spath := arg->earg();
 			saddr := arg->earg();
 			scgipaths = (spath, saddr)::scgipaths;
+		't' =>	extension := arg->earg();
+			mimetype := arg->earg();
+			ntypes := array[len types+1] of (string, string);
+			ntypes[0] = (extension, mimetype);
+			ntypes[1:] = types;
+			types = ntypes;
 		* =>	arg->usage();
 		}
 	args = arg->argv();
 	if(len args != 1)
 		arg->usage();
 	webroot = hd args;
+	indexfiles = rev(indexfiles);
 
 	environment = env->getall();
 
@@ -328,6 +337,21 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		dfd := sys->open("."+path, Sys->OREAD);
 		if(dfd != nil)
 			(dok, dir) := sys->fstat(dfd);
+		if(dir.mode&Sys->DMDIR && path[len path-1] == '/') {
+			for(l := indexfiles; l != nil; l = tl l) {
+				ipath := "."+path+hd l;
+				(iok, idir) := sys->stat(ipath);
+				if(iok != 0)
+					continue;
+				ifd := sys->open(ipath, Sys->OREAD);
+				if(ifd == nil)
+					return respondtext(op, "404", "file not found", "object not found: "+path);
+				dfd = ifd;
+				dok = iok;
+				dir = idir;
+				break;
+			}
+		}
 		if(dfd == nil || dok != 0 || (dir.mode&Sys->DMDIR) && (!lflag || path != nil && path[len path-1] != '/')) {
 			chat(id, "file not found");
 			respondtext(op, "404", "file not found", "object not found: "+path);
