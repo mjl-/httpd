@@ -12,6 +12,7 @@ include "string.m";
 include "exception.m";
 include "keyring.m";
 include "security.m";
+include "encoding.m";
 include "mhttp.m";
 
 sys: Sys;
@@ -21,6 +22,7 @@ exc: Exception;
 keyring: Keyring;
 random: Random;
 str: String;
+base64: Encoding;
 http: Http;
 
 print, sprint, fprint, fildes: import sys;
@@ -46,6 +48,7 @@ webroot := "";
 environment: list of (string, string);
 indexfiles: list of string;
 redirs: list of (string, string);
+auths: list of (string, string, string);
 
 Httpd: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -108,13 +111,15 @@ init(nil: ref Draw->Context, args: list of string)
 	exc = load Exception Exception->PATH;
 	random = load Random Random->PATH;
 	str = load String String->PATH;
+	base64 = load Encoding Encoding->BASE64PATH;
 	http = load Http Http->PATH;
 	http->init(bufio);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-dhl] [-a addr] [-c cachesecs] [-i indexfile] [-r orig new] [-s path addr] [-t extention mimetype] webroot");
+	arg->setusage(arg->progname()+" [-dhl] [-A path realm user:pass] [-a addr] [-c cachesecs] [-i indexfile] [-r orig new] [-s path addr] [-t extention mimetype] webroot");
 	while((c := arg->opt()) != 0)
 		case c {
+		'A' =>	auths = (arg->earg(), arg->earg(), base64->enc(array of byte arg->earg()))::auths;
 		'a' =>	addr = arg->earg();
 		'c' =>	cachesecs = int arg->earg();
 		'd' =>	dflag++;
@@ -137,6 +142,7 @@ init(nil: ref Draw->Context, args: list of string)
 	webroot = hd args;
 	indexfiles = rev(indexfiles);
 	redirs = rev2(redirs);
+	auths = rev3(auths);
 
 	environment = env->getall();
 
@@ -349,6 +355,25 @@ request:
 				respondtext(op, "404", "file not found", "object not found: "+path);
 				continue;
 			}
+		}
+
+		haveauth := needauth := 0;
+		realm: string;
+		which, cred: string;
+		(which, cred) = str->splitstrr(req.h.find("authorization").t1, " ");
+		if(str->tolower(which) != "basic ")
+			cred = nil;
+		for(a := auths; !haveauth && a != nil; a = tl a) {
+			(apath, arealm, acred) := hd a;
+			if(prefix(apath, path)) {
+				needauth = 1;
+				realm = arealm;
+				haveauth = cred == acred;
+			}
+		}
+		if(needauth && !haveauth) {
+			resp.h.add("www-authenticate", sprint("Basic realm=\"%s\"", realm));	# xxx doublequote-quote realm?
+			return respondtext(op, "401", "unauthorized", "authorization required");
 		}
 
 		for(r := redirs; r != nil; r = tl r) {
@@ -1002,6 +1027,14 @@ has(s: string, c: int): int
 		if(s[i] == c)
 			return 1;
 	return 0;
+}
+
+rev3(l: list of (string, string, string)): list of (string, string, string)
+{
+	r: list of (string, string, string);
+	for(; l != nil; l = tl l)
+		r = hd l::r;
+	return r;
 }
 
 rev2(l: list of (string, string)): list of (string, string)
