@@ -491,6 +491,12 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 	}
 	length := int req.h.find("content-length").t1;
 
+	if(req.method == POST && (expect := req.h.find("expect").t1) != nil && req.version == HTTP_11) {
+		if(str->tolower(expect) != "100-continue")
+			return respondtext(op, "417", "expectation failed", sprint("unknown expectectation: %q", expect));
+		fprint(op.fd, "HTTP/1.1 100 continue\r\n\r\n");
+	}
+
 	chat(id, sprint("handling scgi request, scgipath %q scgiaddr %q", scgipath, scgiaddr));
 	scgichan <-= (scgiaddr, replychan := chan of (ref Sys->FD, string));
 	(sfd, serr) := <-replychan;
