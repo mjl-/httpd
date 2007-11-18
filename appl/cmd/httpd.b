@@ -557,7 +557,7 @@ listdir(path: string, op: Op, dfd: ref Sys->FD)
 	resp := op.resp;
 
 	chat(id, "doing directory listing");
-	resp.h.add("content-type", "text/html");
+	resp.h.add("content-type", "text/html; charset=utf-8");
 	op.chunked = op.keepalive;
 
 	accesslog(op);
@@ -569,7 +569,7 @@ listdir(path: string, op: Op, dfd: ref Sys->FD)
 	if(op.req.method == HEAD)
 		return;
 
-	begin := sprint("<html><head><style type=\"text/css\">h1 { font-size: 1.4em; } td, th { padding-left: 1em; padding-right: 1em; } td.mtime, td.size { text-align: right; }</style><title>listing for %s</title></head><body><h1>listing for %s</h1><hr/><table><tr><th>last modified</th><th>size</th><th>name</th></tr>\n", path, pathurls(path));
+	begin := mkhtmlstart("listing for "+path) + sprint("<h1>listing for %s</h1><hr/><table><tr><th>last modified</th><th>size</th><th>name</th></tr>\n", pathurls(path));
 	hwrite(op, array of byte begin);
 	for(;;) {
 		(nd, d) := sys->dirread(dfd);
@@ -762,10 +762,14 @@ responderrmsg(op: Op, st: int, errmsg: string)
 	return respond(op, st, mkhtml(sprint("%d - %s", st, errmsg)), "text/html; charset=utf-8");
 }
 
+mkhtmlstart(msg: string): string
+{
+	return sprint("<html><head><style type=\"text/css\">h1 { font-size: 1.4em; } td, th { padding-left: 1em; padding-right: 1em; } td.mtime, td.size { text-align: right; }</style><title>%s</title></head><body>", htmlescape(msg));
+}
+
 mkhtml(msg: string): string
 {
-	msg = htmlescape(msg);
-	return sprint("<html><head><title>%s</title></head><body><h1>%s</h1></body></html>\n", msg, msg);
+	return mkhtmlstart(msg)+sprint("<h1>%s</h1></body></html>\n", htmlescape(msg));
 }
 
 etag(path: string, op: Op, dir: Sys->Dir): string
