@@ -86,6 +86,8 @@ types := array[] of {
 
 idch: chan of int;
 randch: chan of int;
+killch: chan of int;
+killschedch: chan of (int, int, chan of int);
 
 timefd: ref Sys->FD;
 errorfd: ref Sys->FD;
@@ -157,6 +159,9 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn idgen();
 	randch = chan of int;
 	spawn randgen();
+	killch = chan of int;
+	killschedch = chan of (int, int, chan of int);
+	spawn killer();
 
 	scgichan = chan of (string, chan of (ref Sys->FD, string));
 	spawn scgidialer();
@@ -189,6 +194,24 @@ randgen()
 {
 	for(;;)
 		randch <-= random->randomint(Random->NotQuiteRandom);
+}
+
+killer()
+{
+	for(;;)
+	alt {
+	pid := <-killch =>
+		kill(pid);
+	(pid, timeout, respch) := <-killschedch =>
+		spawn timeoutkill(pid, timeout, respch);
+	}
+}
+
+timeoutkill(pid, timeout: int, respch: chan of int)
+{
+	respch <-= sys->pctl(0, nil);
+	sys->sleep(timeout);
+	kill(pid);
 }
 
 scgidialer()
@@ -239,7 +262,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 	sys->pctl(Sys->NEWPGRP, nil);
 	if(exc->setexcmode(Exception->NOTIFYLEADER) != 0)
 		die(id, sprint("setting exception handling: %r"));
-	sys->pctl(Sys->NEWNS|Sys->NODEVS, nil);
+	pid := sys->pctl(Sys->NEWNS|Sys->NODEVS, nil);
 
 	(ok, sdir) = sys->stat("/");
 	if(ok != 0)
@@ -251,10 +274,13 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		die(id, sprint("bufio open: %r"));
 
 	keepalive := 0;
-
 	for(nsrvs := 0; ; nsrvs++) {
 		if(nsrvs > 0 && !keepalive)
 			break;
+
+		killschedch <-= (pid, 3*60*1000, respch := chan of int);
+		killpid := <-respch;
+
 		if(sys->chdir("/") != 0)
 			break;
 
@@ -268,6 +294,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			respondtext(op, "400", "bad request", "bad request: "+rerr);
 			die(id, "reading request: "+rerr);
 		}
+		killch <-= killpid;
 		chat(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), http->versionstr(req.version)));
 		op.req = req;
 
@@ -983,6 +1010,13 @@ rev[T](l: list of T): list of T
 	for(; l != nil; l = tl l)
 		r = hd l::r;
 	return r;
+}
+
+kill(pid: int)
+{
+	fd := sys->open(sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(fd != nil)
+		fprint(fd, "kill");
 }
 
 say(s: string)
