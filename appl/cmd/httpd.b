@@ -528,16 +528,11 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 	req := op.req;
 	resp := op.resp;
 
-	if(req.method == HEAD) {
-		respondtext(op, "501", "not implemented", "HEAD on scgi paths not implemented");
-		return;
-	}
-
+	length := big 0;
 	if(req.method == POST && !req.h.has("content-length", nil)) {
-		respondtext(op, "400", "bad request", "POST needs a content-length");
-		return;
+		length = big req.h.find("content-length").t1;
+		return respondtext(op, "400", "bad request", "POST needs a content-length");
 	}
-	length := int req.h.find("content-length").t1;
 
 	if(req.method == POST && (expect := req.h.find("expect").t1) != nil && req.version == HTTP_11) {
 		if(str->tolower(expect) != "100-continue")
@@ -553,13 +548,13 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 		die(id, serr);
 	}
 
-	sreq := scgirequest(path, scgipath, req, op, length);
+	sreq := scgirequest(path, scgipath, req, op, big length);
 	if(sys->write(sfd, sreq, len sreq) != len sreq) {
 		respondtext(op, "503", "internal server error", "internal server error");
 		die(id, sprint("write scgi request: %r"));
 	}
 
-	if(length > 0)
+	if(length > big 0)
 		spawn scgifunnel(op.fd, sfd, length);
 
 	sb := bufio->fopen(sfd, Bufio->OREAD);
@@ -597,6 +592,9 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
 
+	if(req.method == HEAD)
+		return;
+
 	for(;;) {
 		n := sys->read(sfd, d := array[Sys->ATOMICIO] of byte, len d);
 		if(n < 0)
@@ -609,9 +607,9 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 	chat(id, "request done");
 }
 
-scgifunnel(fd, sfd: ref Sys->FD, length: int)
+scgifunnel(fd, sfd: ref Sys->FD, length: big)
 {
-	while(length > 0) {
+	while(length > big 0) {
 		n := sys->read(fd, d := array[Sys->ATOMICIO] of byte, len d);
 		if(n < 0)
 			fail(sprint("fail:scgi read: %r"));
@@ -619,7 +617,7 @@ scgifunnel(fd, sfd: ref Sys->FD, length: int)
 			fail(sprint("fail:scgi read: premature eof"));
 		if(sys->write(sfd, d, n) != n)
 			fail(sprint("fail:scgi write: %r"));
-		length -= n;
+		length -= big n;
 	}
 }
 
@@ -772,7 +770,7 @@ pathurls(s: string): string
 	return r;
 }
 
-scgirequest(path, scgipath: string, req: ref Req, op: Op, length: int): array of byte
+scgirequest(path, scgipath: string, req: ref Req, op: Op, length: big): array of byte
 {
 	servername := req.h.find("host").t1;
 	if(servername == nil)
