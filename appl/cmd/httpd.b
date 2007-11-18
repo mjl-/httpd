@@ -35,6 +35,7 @@ Op: adt {
 	id, now:	int;
 	keepalive:	int;
 	chunked:	int;
+	length:		big;
 	fd:	ref Sys->FD;
 	rhost, rport, lhost, lport:	string;
 	req:	ref Req;
@@ -296,7 +297,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		raise "sys-stat not okay";
 	say(sprint("current dir: %s", sdir.name));
 
-	op := Op(id, 0, 0, 0, fd, rhost, rport, lhost, lport, nil, nil);
+	op := Op(id, 0, 0, 0, big 0, fd, rhost, rport, lhost, lport, nil, nil);
 
 	sys->pctl(Sys->NEWPGRP, nil);
 	if(exc->setexcmode(Exception->NOTIFYLEADER) != 0)
@@ -495,7 +496,8 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string)
 	chat(id, "doing plain file");
 	ct := gettype(path);
 	resp.h.add("content-type", ct);
-	resp.h.add("content-length", string dir.length);
+	op.length = dir.length;
+	resp.h.add("content-length", string op.length);
 
 	(valid, ranges) := parserange(req.h.find("range").t1, dir);
 	if(!valid) {
@@ -736,7 +738,8 @@ respond(op: Op, st: int, errmsgstr: string, ct: string)
 
 	op.chunked = 0;
 	errmsg := array of byte errmsgstr;
-	resp.h.set("content-length", string len errmsg);
+	op.length = big len errmsg;
+	resp.h.set("content-length", string op.length);
 
 	err := hresp(resp, op.fd, op.keepalive, op.chunked);
 	if(err != nil)
@@ -787,8 +790,11 @@ maxage(nil: string): string
 
 accesslog(op: Op)
 {
+	length := "";
+	if(!op.chunked)
+		length = string op.length;
 	if(accessfd != nil && op.req != nil)
-		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.url.pack(), http->versionstr(op.req.version), op.resp.st, op.resp.stmsg, op.req.h.find("user-agent").t1);
+		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.url.pack(), http->versionstr(op.req.version), op.resp.st, op.resp.stmsg, length, op.req.h.find("user-agent").t1);
 }
 
 findscgi(path: string): (string, string)
