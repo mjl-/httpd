@@ -304,12 +304,12 @@ request:
 		killch <-= killpid;
 		chat(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), http->versionstr(req.version)));
 		op.req = req;
-
-		# xxx host present for http/1.1 (or full url as path)
-
 		op.keepalive = keepalive = req.version == HTTP_11 && !req.h.has("connection", "close");
-
 		op.resp = resp := ref Resp(req.version, "200", "OK", hdrs);
+
+		if(req.version == HTTP_11 && !req.h.has("host", nil))
+			return respondtext(op, "400", "bad request", "bad request: missing header \"host\"");
+
 
 		case req.method {
 		GET or HEAD or POST =>
@@ -322,6 +322,7 @@ request:
 		OPTIONS =>
 			# xxx should be based on path
 			hdrs.add("allow", "OPTIONS, GET, HEAD, POST, TRACE");
+			hdrs.add("accept-ranges", "bytes");
 			respondtext(op, "200", "OK", "");
 			continue;
 
