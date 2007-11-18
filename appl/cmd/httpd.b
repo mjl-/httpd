@@ -26,6 +26,7 @@ http: Http;
 print, sprint, fprint, fildes: import sys;
 Url, Req, Resp, Hdrs, HTTP_10, HTTP_11, encodepath: import http;
 OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, CONNECT: import http;
+prefix: import str;
 
 
 Op: adt {
@@ -81,6 +82,7 @@ types := array[] of {
 };
 
 idch: chan of int;
+randch: chan of int;
 
 timefd: ref Sys->FD;
 errorfd: ref Sys->FD;
@@ -142,6 +144,8 @@ init(nil: ref Draw->Context, args: list of string)
 
 	idch = chan[8] of int;
 	spawn idgen();
+	randch = chan of int;
+	spawn randgen();
 
 	scgichan = chan of (string, chan of (ref Sys->FD, string));
 	spawn scgidialer();
@@ -168,6 +172,12 @@ idgen()
 	id := 0;
 	for(;;)
 		idch <-= id++;
+}
+
+randgen()
+{
+	for(;;)
+		randch <-= random->randomint(Random->NotQuiteRandom);
 }
 
 scgidialer()
@@ -358,11 +368,11 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		if(dir.mode & Sys->DMDIR)
 			listdir(path, op, dfd);
 		else
-			plainfile(path, op, dfd, dir);
+			plainfile(path, op, dfd, dir, tag);
 	}
 }
 
-plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
+plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string)
 {
 	id := op.id;
 	req := op.req;
@@ -378,12 +388,15 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir)
 		return respond(op, "416", "requested range not satisfiable", nil, nil);
 	}
 	bound := "";
-	if(ranges != nil) {
+	ifrange := req.h.find("if-range").t1;
+	if(ranges != nil && (ifrange == nil
+	                     || ifrange[0] == '"' && tag == ifrange
+	                     || dir.mtime <= parsehttpdate(ifrange))) {
 		if(len ranges == 1) {
 			(start, end) := hd ranges;
 			resp.h.add("content-range", sprint("bytes %bd-%bd/%bd", start, end-big 1, dir.length));
 		} else {
-			bound = sha1(array of byte (string random->randomint(Random->NotQuiteRandom)+","+string op.now));
+			bound = sha1(array of byte (string <-randch+","+string op.now));
 			resp.h.set("content-type", "multipart/byteranges; boundary="+bound);
 		}
 		resp.st = "206";
