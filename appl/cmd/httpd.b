@@ -39,7 +39,8 @@ Op: adt {
 	resp:	ref Resp;
 };
 
-cflag, dflag, hflag, lflag: int;
+dflag, hflag, lflag: int;
+cachesecs := 0;
 addr := "net!localhost!8000";
 webroot := "";
 environment: list of (string, string);
@@ -108,11 +109,11 @@ init(nil: ref Draw->Context, args: list of string)
 	http->init(bufio);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-a addr] [-cdhl] [-i indexfile] [-s path addr] [-t extention mimetype] webroot");
+	arg->setusage(arg->progname()+" [-dhl] [-a addr] [-c cachesecs] [-i indexfile] [-s path addr] [-t extention mimetype] webroot");
 	while((c := arg->opt()) != 0)
 		case c {
 		'a' =>	addr = arg->earg();
-		'c' =>	cflag++;
+		'c' =>	cachesecs = int arg->earg();
 		'd' =>	dflag++;
 		'h' =>	hflag++;
 		'i' =>	indexfiles = arg->earg()::indexfiles;
@@ -379,7 +380,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		if(ifunmodsince && dir.mtime > ifunmodsince)
 			return respond(op, "412", "precondition failed", nil, nil);
 
-		if(cflag)
+		if(cachesecs)
 			resp.h.add("cache-control", maxage(path));
 
 		if(dir.mode & Sys->DMDIR)
@@ -670,7 +671,7 @@ etag(path: string, op: Op, dir: Sys->Dir): string
 
 maxage(nil: string): string
 {
-	return "maxage=600";
+	return sprint("maxage=%d", cachesecs);
 }
 
 accesslog(op: Op)
