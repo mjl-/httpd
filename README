@@ -1,7 +1,7 @@
 httpd is a simple httpd.
 
 features:
-- http/1.0, http/1.1
+- http/1.0, http/1.1 (keep-alive, chunked responses)
 - scgi support
 - virtual hosts
 - sending content-type based on file extension
@@ -9,20 +9,29 @@ features:
 - html directory listings
 
 todo:
+- error responses in html?
+- better use of functions respond/respondtext, and perhaps use table lookup for response code -> response status string
 - headers: accept-*, more
+- better configurability/syntax for doing redirect/scgi based on hostname/port?
 
 - can etags contain comma's?
 - etags: is a client allowed to prepend a W/ to an etag?  should we consider the weak tag to match the strong tag?
 - should scgi response be done non-chunked if it sets its content-length?
 
-- what to do for "complex" requests on (s)cgi, such as with range header.  is cgi supposed to handle HEAD by itself?
+- read spec and determine where we need to add quoting or allow for whitespace between tokens
+- ndb file for config?  can be used to select host, port, path.  perhaps even header
+- make faster, prespawn procs?  do less pctl stuff to not need a spawn?!
+- normal cgi?
 - transparent compression?
 - connection rate limiting?
-- redirects?  rewrites?
-- auth?
-- normal cgi?
+- redirects based on path rewriting?
+- think of ssl?
 - try to fix dir listings for paths with multiple slashes in them.  firefox breaks on them, is firefox right?
+- what to do for "complex" requests on (s)cgi, such as with range header?
 - test with other browsers
+- try to break it
+- write a doc about http protocol, perhaps with an overview of headers that must be implemented for a minimal webserver, and which headers are safe to ignore, indicate which parts of the spec aren't used, which are abused/misused, and which "extensions" are encountered in the wild, and where the spec isn't complete or contradicts itself, and which are for clients/proxies/servers only.
+- test cases?  automatic testing can probably be done.
 
 install
 
@@ -40,6 +49,6 @@ this code is kept up to date using mercurial, to get a fresh copy:
 
 licence
 
-all files written by me (i.e. all except the doc/rfc2616.txt) are
+all files written by me (i.e. all except the rfcs in doc/) are
 in the public domain.  for bugs, questions, comments, etc., contact
 me at mechiel@ueber.net or mechiel@xs4all.nl.
