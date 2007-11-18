@@ -88,6 +88,39 @@ types := array[] of {
 	(".mpg",	"video/mpeg"),
 };
 
+Eok:			con 200;
+Emovedpermanently:	con 301;
+Enotmodified:		con 304;
+Ebadrequest:		con 400;
+Eunauthorized:		con 401;
+Enotfound:		con 404;
+Emethodnotallowed:	con 405;
+Elengthrequired:	con 411;
+Epreconditionfailed:	con 412;
+Enotsatisfiable:	con 416;
+Eexpectationfailed:	con 417;
+Eservererror:		con 500;
+Enotimplemented:	con 501;
+
+statusmsgs := array[] of {
+	(100,		"Continue"),
+	(200,		"OK"),
+	(206,		"Partial Content"),
+	(301,		"Moved Permanently"),
+	(304,		"Not Modified"),
+	(400,		"Bad Request"),
+	(401,		"Unauthorized"),
+	(403,		"Forbidden"),
+	(404,		"Object Not Found"),
+	(405,		"Method Not Allowed"),
+	(411,		"Length Required"),
+	(412,		"Precondition Failed"),
+	(416,		"Requested Range Not Satisfiable"),
+	(417,		"Expectation Failed"),
+	(500,		"Internal Server Error"),
+	(501,		"Not Implemented"),
+};
+
 idch: chan of int;
 randch: chan of int;
 killch: chan of int;
@@ -298,7 +331,7 @@ request:
 		if(rerr != nil) {
 			hdrs.add("connection", "close");
 			op.resp = ref Resp(HTTP_10, nil, nil, hdrs);
-			respondtext(op, "400", "bad request", "bad request: "+rerr);
+			responderrmsg(op, Ebadrequest, nil);
 			die(id, "reading request: "+rerr);
 		}
 		killch <-= killpid;
@@ -308,7 +341,7 @@ request:
 		op.resp = resp := ref Resp(req.version, "200", "OK", hdrs);
 
 		if(req.version == HTTP_11 && !req.h.has("host", nil))
-			return respondtext(op, "400", "bad request", "bad request: missing header \"host\"");
+			return responderrmsg(op, Ebadrequest, "Bad Request: Missing header \"Host\".");
 
 
 		case req.method {
@@ -316,23 +349,23 @@ request:
 			;
 		TRACE =>
 			hdrs.add("content-type", "message/http");
-			respondtext(op, "200", "OK", req.pack());
+			responderrmsg(op, Eok, req.pack());
 			continue;
 
 		OPTIONS =>
 			# xxx should be based on path
 			hdrs.add("allow", "OPTIONS, GET, HEAD, POST, TRACE");
 			hdrs.add("accept-ranges", "bytes");
-			respondtext(op, "200", "OK", "");
+			responderr(op, Eok);
 			continue;
 
 		PUT or DELETE =>
 			# note: when implementing these, complete support for if-match and if-none-match
-			respondtext(op, "501", "not implemented", "method not implemented");
+			responderrmsg(op, Enotimplemented, nil);
 			continue;
 
 		* =>
-			respondtext(op, "501", "not implemented", "unknown method");
+			responderrmsg(op, Enotimplemented, "Unknown Method");
 			return;
 		}
 
@@ -346,14 +379,14 @@ request:
 			(hostdir, nil) = str->splitstrl(hostdir, ":");
 			if(str->drop(hostdir, "0-9a-zA-Z.-") != nil || str->splitstrl(hostdir, "..").t1 != nil) {
 				chat(id, "bad host in header");
-				respondtext(op, "404", "file not found", "object not found: "+path);
+				responderrmsg(op, Enotfound, nil);
 				continue;
 			}
 		}
 		if(hflag && sys->chdir(hostdir) != 0) {
 			hostdir = "_default";
 			if(havehost && sys->chdir(hostdir) != 0) {
-				respondtext(op, "404", "file not found", "object not found: "+path);
+				responderrmsg(op, Enotfound, nil);
 				continue;
 			}
 		}
@@ -374,14 +407,14 @@ request:
 		}
 		if(needauth && !haveauth) {
 			resp.h.add("www-authenticate", sprint("Basic realm=\"%s\"", realm));	# xxx doublequote-quote realm?
-			return respondtext(op, "401", "unauthorized", "authorization required");
+			return responderrmsg(op, Eunauthorized, nil);
 		}
 
 		for(r := redirs; r != nil; r = tl r) {
 			(orig, new) := hd r;
 			if(orig == path) {
 				resp.h.set("location", new);
-				respond(op, "301", "moved permanently", nil, nil);
+				responderr(op, Emovedpermanently);
 				continue request;
 			}
 		}
@@ -402,7 +435,7 @@ request:
 					continue;
 				ifd := sys->open(ipath, Sys->OREAD);
 				if(ifd == nil)
-					return respondtext(op, "404", "file not found", "object not found: "+path);
+					return responderrmsg(op, Enotfound, nil);
 				dfd = ifd;
 				dok = iok;
 				dir = idir;
@@ -411,13 +444,13 @@ request:
 		}
 		if(dfd == nil || dok != 0 || (dir.mode&Sys->DMDIR) && (!lflag || path != nil && path[len path-1] != '/')) {
 			chat(id, "file not found");
-			respondtext(op, "404", "file not found", "object not found: "+path);
+			responderrmsg(op, Enotfound, nil);
 			continue;
 		}
 
 		if(req.method == POST) {
 			resp.h.add("allow", "GET, HEAD, OPTIONS");
-			respondtext(op, "405", "method not allowed", "POST not allowed");
+			responderrmsg(op, Emethodnotallowed, "POST not allowed");
 			return;
 		}
 
@@ -427,21 +460,21 @@ request:
 
 		ifmatch := req.h.find("if-match").t1;
 		if(ifmatch != nil && !etagmatch(tag, ifmatch, 1))
-			return respond(op, "412", "precondition failed", nil, nil);
+			return responderr(op, Epreconditionfailed);
 
 		ifmodsince := parsehttpdate(req.h.find("if-modified-since").t1);
 		chat(id, sprint("ifmodsince, %d, mtime %d", ifmodsince, dir.mtime));
 		if(ifmodsince && dir.mtime <= ifmodsince)
-			return respond(op, "304", "not modified", nil, nil);
+			return responderr(op, Enotmodified);
 
 		ifnonematch := req.h.find("if-none-match").t1;
 		if(ifnonematch != nil && req.method != HEAD && req.method != GET && etagmatch(tag, ifnonematch, 0))
-			return respond(op, "412", "precondition failed", nil, nil);
+			return responderr(op, Epreconditionfailed);
 
 		ifunmodsince := parsehttpdate(req.h.find("if-unmodified-since").t1);
 		chat(id, sprint("ifunmodsince, %d", ifunmodsince));
 		if(ifunmodsince && dir.mtime > ifunmodsince)
-			return respond(op, "412", "precondition failed", nil, nil);
+			return responderr(op, Epreconditionfailed);
 
 		if(cachesecs)
 			resp.h.add("cache-control", maxage(path));
@@ -467,7 +500,7 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string)
 	(valid, ranges) := parserange(req.h.find("range").t1, dir);
 	if(!valid) {
 		resp.h.add("content-range", sprint("bytes */%bd", dir.length));
-		return respond(op, "416", "requested range not satisfiable", nil, nil);
+		return responderr(op, Enotsatisfiable);
 	}
 	bound := "";
 	ifrange := req.h.find("if-range").t1;
@@ -567,12 +600,12 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 	length := big 0;
 	if(req.method == POST && !req.h.has("content-length", nil)) {
 		length = big req.h.find("content-length").t1;
-		return respondtext(op, "400", "bad request", "POST needs a content-length");
+		return responderrmsg(op, Elengthrequired, nil);
 	}
 
 	if(req.method == POST && (expect := req.h.find("expect").t1) != nil && req.version == HTTP_11) {
 		if(str->tolower(expect) != "100-continue")
-			return respondtext(op, "417", "expectation failed", sprint("unknown expectectation: %q", expect));
+			return responderrmsg(op, Eexpectationfailed, sprint("Unrecognized Expectectation: %q", expect));
 		fprint(op.fd, "HTTP/1.1 100 continue\r\n\r\n");
 	}
 
@@ -580,13 +613,13 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 	scgichan <-= (scgiaddr, replychan := chan of (ref Sys->FD, string));
 	(sfd, serr) := <-replychan;
 	if(serr != nil) {
-		respondtext(op, "503", "internal server error", "internal server error");
+		responderrmsg(op, Eservererror, nil);
 		die(id, serr);
 	}
 
 	sreq := scgirequest(path, scgipath, req, op, big length);
 	if(sys->write(sfd, sreq, len sreq) != len sreq) {
-		respondtext(op, "503", "internal server error", "internal server error");
+		responderrmsg(op, Eservererror, nil);
 		die(id, sprint("write scgi request: %r"));
 	}
 
@@ -595,13 +628,13 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 
 	sb := bufio->fopen(sfd, Bufio->OREAD);
 	if(sb == nil) {
-		respondtext(op, "503", "internal server error", "internal server error");
+		responderrmsg(op, Eservererror, nil);
 		die(id, sprint("bufio fopen scgi fd: %r"));
 	}
 
 	l := sb.gets('\n');
 	if(!prefix("status: ", str->tolower(l))) {
-		respondtext(op, "503", "internal server error", "internal server error");
+		responderrmsg(op, Eservererror, nil);
 		die(id, "bad scgi response line: "+l);
 	}
 	l = l[len "status: ":];
@@ -617,7 +650,7 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 
 	(hdrs, rerr) := Hdrs.read(sb);
 	if(rerr != nil) {
-		respondtext(op, "503", "internal server error", "internal server error");
+		responderrmsg(op, Eservererror, nil);
 		die(id, "reading scgi headers: "+rerr);
 	}
 	for(hl := hdrs.all(); hl != nil; hl = tl hl)
@@ -693,17 +726,17 @@ hwriteeof(op: Op)
 		fprint(op.fd, "0\r\n\r\n");
 }
 
-respond(op: Op, st, stmsg, errmsgstr: string, ct: string)
+respond(op: Op, st: int, errmsgstr: string, ct: string)
 {
 	resp := op.resp;
-	resp.st = st;
-	resp.stmsg = stmsg;
+	resp.st = string st;
+	resp.stmsg = statusmsg(st);
 	if(ct != nil)
-		resp.h.add("content-type", ct);
+		resp.h.set("content-type", ct);
 
 	op.chunked = 0;
 	errmsg := array of byte errmsgstr;
-	resp.h.add("content-length", string len errmsg);
+	resp.h.set("content-length", string len errmsg);
 
 	err := hresp(resp, op.fd, op.keepalive, op.chunked);
 	if(err != nil)
@@ -717,9 +750,22 @@ respond(op: Op, st, stmsg, errmsgstr: string, ct: string)
 	accesslog(op);
 }
 
-respondtext(op: Op, st, stmsg, errmsg: string)
+responderr(op: Op, st: int)
 {
-	return respond(op, st, stmsg, errmsg, "text/plain");
+	return respond(op, st, nil, nil);
+}
+
+responderrmsg(op: Op, st: int, errmsg: string)
+{
+	if(errmsg == nil)
+		errmsg = statusmsg(st);
+	return respond(op, st, mkhtml(sprint("%d - %s", st, errmsg)), "text/html; charset=utf-8");
+}
+
+mkhtml(msg: string): string
+{
+	msg = htmlescape(msg);
+	return sprint("<html><head><title>%s</title></head><body><h1>%s</h1></body></html>\n", msg, msg);
 }
 
 etag(path: string, op: Op, dir: Sys->Dir): string
@@ -963,6 +1009,14 @@ etagmatch(etag: string, etagstr: string, strong: int): int
 			return 1;
 	}
 	return 0;
+}
+
+statusmsg(code: int): string
+{
+	for(i := 0; i < len statusmsgs && statusmsgs[i].t0 <= code; i++)
+		if(code == statusmsgs[i].t0)
+			return statusmsgs[i].t1;
+	raise sprint("missing status message for code %d", code);
 }
 
 strip(s, cl: string): string
