@@ -277,43 +277,22 @@ httpserve(fd: ref Sys->FD, conndir: string)
 	id := <-idch;
 	chat(id, "httpserve");
 
-	addr, ferr: string;
-	(addr, ferr) = readfileline(conndir+"/local", 256);
-	if(ferr != nil)
-		die(id, ferr);
-	(lhost, lport) := str->splitstrl(addr, "!");
-	if(lport != nil)
-		lport = lport[1:];
-	(addr, ferr) = readfileline(conndir+"/remote", 256);
-	if(ferr != nil)
-		die(id, ferr);
-	(rhost, rport) := str->splitstrl(addr, "!");
-	if(rport != nil)
-		rport = rport[1:];
+	(lhost, lport) := readaddr(id, conndir+"/local");
+	(rhost, rport) := readaddr(id, conndir+"/remote");
 	chat(id, sprint("connect from %s:%s to %s:%s", rhost, rport, lhost, lport));
-
-	(ok, sdir) := sys->stat(".");
-	if(ok != 0)
-		raise "sys-stat not okay";
-	say(sprint("current dir: %s", sdir.name));
-
-	op := Op(id, 0, 0, 0, big 0, fd, rhost, rport, lhost, lport, nil, nil);
 
 	sys->pctl(Sys->NEWPGRP, nil);
 	if(exc->setexcmode(Exception->NOTIFYLEADER) != 0)
 		die(id, sprint("setting exception handling: %r"));
 	pid := sys->pctl(Sys->NEWNS|Sys->NODEVS, nil);
 
-	(ok, sdir) = sys->stat("/");
-	if(ok != 0)
-		raise "sys-stat not okay";
-	say(sprint("current dir2: %s", sdir.name));
-
 	b := bufio->fopen(fd, Bufio->OREAD);
 	if(b == nil)
 		die(id, sprint("bufio open: %r"));
 
+	op := Op(id, 0, 0, 0, big 0, fd, rhost, rport, lhost, lport, nil, nil);
 	keepalive := 0;
+
 request:
 	for(nsrvs := 0; ; nsrvs++) {
 		if(nsrvs > 0 && !keepalive)
@@ -1047,6 +1026,17 @@ index(a: array of string, s: string): int
 		if(a[i] == s)
 			return i;
 	return -1;
+}
+
+readaddr(id: int, path: string): (string, string)
+{
+	(s, err) := readfileline(path, 256);
+	if(err != nil)
+		die(id, err);
+	(lhost, lport) := str->splitstrl(s, "!");
+	if(lport != nil)
+		lport = lport[1:];
+	return (lhost, lport);
 }
 
 readfileline(path: string, maxsize: int): (string, string)
