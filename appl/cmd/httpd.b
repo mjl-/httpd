@@ -291,179 +291,168 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		die(id, sprint("bufio open: %r"));
 
 	op := Op(id, 0, 0, 0, big 0, fd, rhost, rport, lhost, lport, nil, nil);
-	keepalive := 0;
 
-request:
 	for(nsrvs := 0; ; nsrvs++) {
-		if(nsrvs > 0 && !keepalive)
+		if(nsrvs > 0 && !op.keepalive)
 			break;
-
-		killschedch <-= (pid, 3*60*1000, respch := chan of int);
-		killpid := <-respch;
 
 		if(sys->chdir("/") != 0)
 			break;
 
-		op.now = readtime();
-		hdrs := Hdrs.new(("date", httpdate(op.now))::("server", "nhttpd/0")::nil);
-
-		(req, rerr) := Req.read(b);
-		if(rerr != nil) {
-			hdrs.add("connection", "close");
-			op.resp = ref Resp(HTTP_10, nil, nil, hdrs);
-			responderrmsg(op, Ebadrequest, nil);
-			die(id, "reading request: "+rerr);
-		}
-		killch <-= killpid;
-		chat(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), http->versionstr(req.version)));
-		op.req = req;
-		op.keepalive = keepalive = req.version == HTTP_11 && !req.h.has("connection", "close");
-		op.resp = resp := ref Resp(req.version, "200", "OK", hdrs);
-
-		if(req.version == HTTP_11 && !req.h.has("host", nil))
-			return responderrmsg(op, Ebadrequest, "Bad Request: Missing header \"Host\".");
-
-
-		case req.method {
-		GET or HEAD or POST =>
-			;
-		TRACE =>
-			hdrs.add("content-type", "message/http");
-			responderrmsg(op, Eok, req.pack());
-			continue;
-
-		OPTIONS =>
-			# xxx should be based on path
-			hdrs.add("allow", "OPTIONS, GET, HEAD, POST, TRACE");
-			hdrs.add("accept-ranges", "bytes");
-			responderr(op, Eok);
-			continue;
-
-		PUT or DELETE =>
-			# note: when implementing these, complete support for if-match and if-none-match
-			responderrmsg(op, Enotimplemented, nil);
-			continue;
-
-		* =>
-			responderrmsg(op, Enotimplemented, "Unknown Method");
-			return;
-		}
-
-		path := pathsanitize(req.url.path);
-		chat(id, "path is "+path);
-
-		(havehost, hostdir) := req.h.find("host");
-		if(!havehost) {
-			hostdir = "_default";
-		} else {
-			(hostdir, nil) = str->splitstrl(hostdir, ":");
-			if(str->drop(hostdir, "0-9a-zA-Z.-") != nil || str->splitstrl(hostdir, "..").t1 != nil) {
-				chat(id, "bad host in header");
-				responderrmsg(op, Enotfound, nil);
-				continue;
-			}
-		}
-		if(hflag && sys->chdir(hostdir) != 0) {
-			hostdir = "_default";
-			if(havehost && sys->chdir(hostdir) != 0) {
-				responderrmsg(op, Enotfound, nil);
-				continue;
-			}
-		}
-
-		haveauth := needauth := 0;
-		realm: string;
-		which, cred: string;
-		(which, cred) = str->splitstrr(req.h.find("authorization").t1, " ");
-		if(str->tolower(which) != "basic ")
-			cred = nil;
-		for(a := auths; !haveauth && a != nil; a = tl a) {
-			(apath, arealm, acred) := hd a;
-			if(prefix(apath, path)) {
-				needauth = 1;
-				realm = arealm;
-				haveauth = cred == acred;
-			}
-		}
-		if(needauth && !haveauth) {
-			resp.h.add("www-authenticate", sprint("Basic realm=\"%s\"", realm));	# xxx doublequote-quote realm?
-			return responderrmsg(op, Eunauthorized, nil);
-		}
-
-		for(r := redirs; r != nil; r = tl r) {
-			(orig, new) := hd r;
-			if(orig == path) {
-				resp.h.set("location", new);
-				responderr(op, Emovedpermanently);
-				continue request;
-			}
-		}
-
-		if(((scgipath, scgiaddr) := findscgi(path)).t1 != nil) {
-			scgi(path, op, scgipath, scgiaddr);
-			continue;
-		}
-
-		dfd := sys->open("."+path, Sys->OREAD);
-		if(dfd != nil)
-			(dok, dir) := sys->fstat(dfd);
-		if(dir.mode&Sys->DMDIR && path[len path-1] == '/') {
-			for(l := indexfiles; l != nil; l = tl l) {
-				ipath := "."+path+hd l;
-				(iok, idir) := sys->stat(ipath);
-				if(iok != 0)
-					continue;
-				ifd := sys->open(ipath, Sys->OREAD);
-				if(ifd == nil)
-					return responderrmsg(op, Enotfound, nil);
-				dfd = ifd;
-				dok = iok;
-				dir = idir;
-				break;
-			}
-		}
-		if(dfd == nil || dok != 0 || (dir.mode&Sys->DMDIR) && (!lflag || path != nil && path[len path-1] != '/')) {
-			chat(id, "file not found");
-			responderrmsg(op, Enotfound, nil);
-			continue;
-		}
-
-		if(req.method == POST) {
-			resp.h.add("allow", "GET, HEAD, OPTIONS");
-			responderrmsg(op, Emethodnotallowed, "POST not allowed");
-			return;
-		}
-
-		resp.h.add("last-modified", httpdate(dir.mtime));
-		tag := etag(path, op, dir);
-		resp.h.add("etag", tag);
-
-		ifmatch := req.h.find("if-match").t1;
-		if(ifmatch != nil && !etagmatch(tag, ifmatch, 1))
-			return responderr(op, Epreconditionfailed);
-
-		ifmodsince := parsehttpdate(req.h.find("if-modified-since").t1);
-		chat(id, sprint("ifmodsince, %d, mtime %d", ifmodsince, dir.mtime));
-		if(ifmodsince && dir.mtime <= ifmodsince)
-			return responderr(op, Enotmodified);
-
-		ifnonematch := req.h.find("if-none-match").t1;
-		if(ifnonematch != nil && req.method != HEAD && req.method != GET && etagmatch(tag, ifnonematch, 0))
-			return responderr(op, Epreconditionfailed);
-
-		ifunmodsince := parsehttpdate(req.h.find("if-unmodified-since").t1);
-		chat(id, sprint("ifunmodsince, %d", ifunmodsince));
-		if(ifunmodsince && dir.mtime > ifunmodsince)
-			return responderr(op, Epreconditionfailed);
-
-		if(cachesecs)
-			resp.h.add("cache-control", maxage(path));
-
-		if(dir.mode & Sys->DMDIR)
-			listdir(path, op, dfd);
-		else
-			plainfile(path, op, dfd, dir, tag);
+		httptransact(pid, b, op);
 	}
+}
+
+httptransact(pid: int, b: ref Iobuf, op: Op)
+{
+	id := op.now;
+	op.now = readtime();
+	hdrs := Hdrs.new(("server", "nhttpd/0")::nil);
+
+	killschedch <-= (pid, 3*60*1000, respch := chan of int);
+	killpid := <-respch;
+
+	(req, rerr) := Req.read(b);
+	hdrs.add("date", httpdate(op.now));
+	if(rerr != nil) {
+		hdrs.add("connection", "close");
+		op.resp = ref Resp(HTTP_10, nil, nil, hdrs);
+		responderrmsg(op, Ebadrequest, nil);
+		killch <-= killpid;
+		die(id, "reading request: "+rerr);
+	}
+	killch <-= killpid;
+	chat(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), http->versionstr(req.version)));
+	op.req = req;
+	op.keepalive = req.version == HTTP_11 && !req.h.has("connection", "close");
+	op.resp = resp := ref Resp(req.version, "200", "OK", hdrs);
+
+	if(req.version == HTTP_11 && !req.h.has("host", nil))
+		return responderrmsg(op, Ebadrequest, "Bad Request: Missing header \"Host\".");
+
+	case req.method {
+	GET or HEAD or POST =>
+		;
+	TRACE =>
+		hdrs.add("content-type", "message/http");
+		return responderrmsg(op, Eok, req.pack());
+
+	OPTIONS =>
+		# xxx should be based on path
+		hdrs.add("allow", "OPTIONS, GET, HEAD, POST, TRACE");
+		hdrs.add("accept-ranges", "bytes");
+		return responderr(op, Eok);
+
+	PUT or DELETE =>
+		# note: when implementing these, complete support for if-match and if-none-match
+		return responderrmsg(op, Enotimplemented, nil);
+
+	* =>
+		return responderrmsg(op, Enotimplemented, "Unknown Method");
+	}
+
+	path := pathsanitize(req.url.path);
+	chat(id, "path is "+path);
+
+	(havehost, hostdir) := req.h.find("host");
+	if(!havehost) {
+		hostdir = "_default";
+	} else {
+		(hostdir, nil) = str->splitstrl(hostdir, ":");
+		if(str->drop(hostdir, "0-9a-zA-Z.-") != nil || str->splitstrl(hostdir, "..").t1 != nil)
+			return responderrmsg(op, Enotfound, nil);
+	}
+	if(hflag && sys->chdir(hostdir) != 0) {
+		hostdir = "_default";
+		if(havehost && sys->chdir(hostdir) != 0)
+			return responderrmsg(op, Enotfound, nil);
+	}
+
+	haveauth := needauth := 0;
+	realm: string;
+	which, cred: string;
+	(which, cred) = str->splitstrr(req.h.find("authorization").t1, " ");
+	if(str->tolower(which) != "basic ")
+		cred = nil;
+	for(a := auths; !haveauth && a != nil; a = tl a) {
+		(apath, arealm, acred) := hd a;
+		if(prefix(apath, path)) {
+			needauth = 1;
+			realm = arealm;
+			haveauth = cred == acred;
+		}
+	}
+	if(needauth && !haveauth) {
+		resp.h.add("www-authenticate", sprint("Basic realm=\"%s\"", realm));	# xxx doublequote-quote realm?
+		return responderrmsg(op, Eunauthorized, nil);
+	}
+
+	for(r := redirs; r != nil; r = tl r) {
+		(orig, new) := hd r;
+		if(orig == path) {
+			resp.h.set("location", new);
+			return responderr(op, Emovedpermanently);
+		}
+	}
+
+	if(((scgipath, scgiaddr) := findscgi(path)).t1 != nil)
+		return scgi(path, op, scgipath, scgiaddr);
+
+	dfd := sys->open("."+path, Sys->OREAD);
+	if(dfd != nil)
+		(dok, dir) := sys->fstat(dfd);
+	if(dir.mode&Sys->DMDIR && path[len path-1] == '/') {
+		for(l := indexfiles; l != nil; l = tl l) {
+			ipath := "."+path+hd l;
+			(iok, idir) := sys->stat(ipath);
+			if(iok != 0)
+				continue;
+			ifd := sys->open(ipath, Sys->OREAD);
+			if(ifd == nil)
+				return responderrmsg(op, Enotfound, nil);
+			dfd = ifd;
+			dok = iok;
+			dir = idir;
+			break;
+		}
+	}
+	if(dfd == nil || dok != 0 || (dir.mode&Sys->DMDIR) && (!lflag || path != nil && path[len path-1] != '/'))
+		return responderrmsg(op, Enotfound, nil);
+
+	if(req.method == POST) {
+		resp.h.add("allow", "GET, HEAD, OPTIONS");
+		return responderrmsg(op, Emethodnotallowed, "POST not allowed");
+	}
+
+	resp.h.add("last-modified", httpdate(dir.mtime));
+	tag := etag(path, op, dir);
+	resp.h.add("etag", tag);
+
+	ifmatch := req.h.find("if-match").t1;
+	if(ifmatch != nil && !etagmatch(tag, ifmatch, 1))
+		return responderr(op, Epreconditionfailed);
+
+	ifmodsince := parsehttpdate(req.h.find("if-modified-since").t1);
+	chat(id, sprint("ifmodsince, %d, mtime %d", ifmodsince, dir.mtime));
+	if(ifmodsince && dir.mtime <= ifmodsince)
+		return responderr(op, Enotmodified);
+
+	ifnonematch := req.h.find("if-none-match").t1;
+	if(ifnonematch != nil && req.method != HEAD && req.method != GET && etagmatch(tag, ifnonematch, 0))
+		return responderr(op, Epreconditionfailed);
+
+	ifunmodsince := parsehttpdate(req.h.find("if-unmodified-since").t1);
+	chat(id, sprint("ifunmodsince, %d", ifunmodsince));
+	if(ifunmodsince && dir.mtime > ifunmodsince)
+		return responderr(op, Epreconditionfailed);
+
+	if(cachesecs)
+		resp.h.add("cache-control", maxage(path));
+
+	if(dir.mode & Sys->DMDIR)
+		listdir(path, op, dfd);
+	else
+		plainfile(path, op, dfd, dir, tag);
 }
 
 plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string)
@@ -593,15 +582,13 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 	chat(id, sprint("handling scgi request, scgipath %q scgiaddr %q", scgipath, scgiaddr));
 	scgichan <-= (scgiaddr, replychan := chan of (ref Sys->FD, string));
 	(sfd, serr) := <-replychan;
-	if(serr != nil) {
-		responderrmsg(op, Eservererror, nil);
-		die(id, serr);
-	}
+	if(serr != nil)
+		return responderrmsg(op, Eservererror, nil);
 
 	sreq := scgirequest(path, scgipath, req, op, big length);
 	if(sys->write(sfd, sreq, len sreq) != len sreq) {
-		responderrmsg(op, Eservererror, nil);
-		die(id, sprint("write scgi request: %r"));
+		chat(id, sprint("write scgi request: %r"));
+		return responderrmsg(op, Eservererror, nil);
 	}
 
 	if(length > big 0)
@@ -609,14 +596,14 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 
 	sb := bufio->fopen(sfd, Bufio->OREAD);
 	if(sb == nil) {
-		responderrmsg(op, Eservererror, nil);
-		die(id, sprint("bufio fopen scgi fd: %r"));
+		chat(id, sprint("bufio fopen scgi fd: %r"));
+		return responderrmsg(op, Eservererror, nil);
 	}
 
 	l := sb.gets('\n');
 	if(!prefix("status: ", str->tolower(l))) {
-		responderrmsg(op, Eservererror, nil);
-		die(id, "bad scgi response line: "+l);
+		chat(id, "bad scgi response line: "+l);
+		return responderrmsg(op, Eservererror, nil);
 	}
 	l = l[len "status: ":];
 	(st, stmsg) := str->splitstrl(l, " ");
@@ -631,8 +618,8 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 
 	(hdrs, rerr) := Hdrs.read(sb);
 	if(rerr != nil) {
-		responderrmsg(op, Eservererror, nil);
-		die(id, "reading scgi headers: "+rerr);
+		chat(id, "reading scgi headers: "+rerr);
+		return responderrmsg(op, Eservererror, nil);
 	}
 	for(hl := hdrs.all(); hl != nil; hl = tl hl)
 		resp.h.add((hd hl).t0, (hd hl).t1);
