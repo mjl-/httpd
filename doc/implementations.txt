@@ -1,0 +1,30 @@
+benchmarks:
+http://www.acme.com/software/http_load/
+http://www.hping.org/wbox/
+
+servers:
+lighttpd
+apache
+thttpd
+hiawatha
+cherokee
+bozohttpd
+nostromo
+
+clients:
+lynx
+w3m
+links
+elinks
+firefox
+opera
+konqueror
+wget
+openbsd ftp
+curl
+python http libs
+charon
+safari
+internet explorer
+
+compliance testers:

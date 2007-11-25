@@ -1,0 +1,86 @@
+requests made by commonly used clients
+
+python2.5 libs:
+GET /test 123 HTTP/1.1
+Host: localhost:8000
+Accept-Encoding: identity
+
+wget:
+GET /test%20123 HTTP/1.0
+User-Agent: Wget/1.10.2
+Accept: */*
+Host: localhost:8000
+Connection: Keep-Alive
+
+openbsd ftp:
+GET /test 123 HTTP/1.0
+Host: localhost:8000
+User-Agent: OpenBSD ftp
+
+firefox 2.0.0.6:
+GET /test%20123 HTTP/1.1
+Host: localhost
+User-Agent: Mozilla/5.0 (X11; U; OpenBSD i386; en-US; rv:1.8.1.6) Gecko/20070819 Firefox/2.0.0.6
+Accept: text/xml,application/xml,application/xhtml+xml,text/html;q=0.9,text/plain;q=0.8,image/png,*/*;q=0.5
+Accept-Language: en-us,en;q=0.5
+Accept-Encoding: gzip,deflate
+Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7
+Keep-Alive: 300
+Connection: keep-alive
+
+curl:
+GET /test 123 HTTP/1.1
+User-Agent: curl/7.16.2 (i386-unknown-openbsd4.2) libcurl/7.16.2 OpenSSL/0.9.7j zlib/1.2.3 libidn/0.6.1
+Host: localhost:8000
+Accept: */*
+
+lynx:
+GET /test%20123 HTTP/1.0
+Host: localhost:8000
+Accept: text/html, text/plain, text/sgml, video/mpeg, image/jpeg, image/tiff, image/x-rgb, image/png, image/x-xbitmap, image/x-xbm, image/gif, application/postscript, */*;q=0.01
+Accept-Encoding: gzip, compress
+Accept-Language: en
+User-Agent: Lynx/2.8.5rel.4 libwww-FM/2.14 SSL-MM/1.4.1 OpenSSL/0.9.7j
+
+w3m:
+GET /test%20123 HTTP/1.0
+User-Agent: w3m/0.5.2
+Accept: text/html, text/*;q=0.5, image/*
+Accept-Encoding: gzip, compress, bzip, bzip2, deflate
+Accept-Language: en;q=1.0
+Host: localhost:8000
+
+charon:
+GET /test lala HTTP/1.0
+Accept: */*; *
+Host: localhost:8000
+User-Agent: Mozilla/4.08 (Charon; Inferno)
+
+links:
+GET /test%20123 HTTP/1.1
+Host: localhost:8000
+User-Agent: Links (1.00pre20; OpenBSD 4.2 i386; 80x24)
+Accept: */*
+Accept-Charset: us-ascii, ISO-8859-1, ISO-8859-2, ISO-8859-4, ISO-8895-5, ISO-8859-7, ISO-8895-9, ISO-8859-13, ISO-8859-15, ISO-8859-16, windows-1250, windows-1251, windows-1257, cp437, cp737, cp850, cp852, cp866, x-cp866-u, x-mac, x-mac-ce, x-kam-cs, koi8-r, koi8-u, TCVN-5712, VISCII, utf-8
+Accept-Language: en, *;q=0.1
+Connection: Keep-Alive
+
+elinks:
+GET /test%20123 HTTP/1.1
+Host: localhost:8000
+User-Agent: ELinks/0.11.2 (textmode; OpenBSD 4.2 i386; 80x24-2)
+Accept: */*
+Accept-Encoding: gzip
+Accept-Language: en
+Connection: Keep-Alive
+
+konqueror:
+GET /test%20123 HTTP/1.1
+User-Agent: Mozilla/5.0 (compatible; Konqueror/3.5; OpenBSD) KHTML/3.5.7 (like Gecko)
+Accept: text/html, image/jpeg, image/png, text/*, image/*, */*
+Accept-Encoding: x-gzip, x-deflate, gzip, deflate
+Accept-Charset: utf-8, utf-8;q=0.5, *;q=0.5
+Accept-Language: en
+Host: localhost:8000
+Connection: Keep-Alive
+

@@ -1,0 +1,57 @@
+# on http (minus webdav)
+
+rfc1945.txt
+	http/1.0
+
+rfc2145.txt
+	about http version numbers
+
+rfc2295.txt
+	"Transparent Content Negotiation in HTTP"
+
+rfc2616.txt
+	http/1.1
+
+rfc2617.txt
+	"HTTP Authentication: Basic and Digest Access Authentication"
+
+rfc2818.txt
+	"HTTP Over TLS"
+
+rfc2964.txt
+	cookies
+
+rfc2965.txt
+	cookies
+
+rfc3143.txt
+	"Known HTTP Proxy/Caching Problems"
+
+rfc3205.txt
+	"On the use of HTTP as a Substrate"
+
+rfc3230.txt
+	"Instance Digests in HTTP"
+
+rfc4229.txt
+	"HTTP Header Field Registrations"
+
+
+# on uris/urls
+
+rfc1630.txt
+	"Universal Resource Identifiers in WWW"
+
+rfc3305.txt
+	uri/url/urn
+
+rfc3986.txt
+	uri syntax
+
+
+# to read
+
+ftp://ftp.rfc-editor.org/in-notes/rfc2660.txt
+ftp://ftp.rfc-editor.org/in-notes/rfc2817.txt
+ftp://ftp.rfc-editor.org/in-notes/rfc2936.txt
+ftp://ftp.rfc-editor.org/in-notes/rfc3229.txt

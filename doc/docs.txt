@@ -1,0 +1,2 @@
+message headers (also other protocols than http):
+http://www.iana.org/assignments/message-headers/message-header-index.html
