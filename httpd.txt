@@ -4,7 +4,7 @@ ndb/cs
 cd
 cd src/httpd/appl/cmd
 sblpath=(/dis .)
-httpd -cdhl -s /scgi/ net!localhost!4006 -s /nscgi/ net!localhost!4007 /tmp &
+httpd -dhl -A /test/ 'special place' test:test -c 10 -i index.html -r /scgi /scgi/test -t .oink 'text/plain; charset=utf-8' -s /scgi/ net!localhost!4006 -s /nscgi/ net!localhost!4007 /tmp &
 
 emu -c0
 bind '#U*/home' /usr
@@ -13,7 +13,82 @@ cd
 cd src/scgid/
 scgid -d doc/scgid.conf
 
+tail -f $HOME/inferno-os/services/logs/httpdaccess
+
 telnet localhost 8000
+GET /test HTTP/1.1
+host: localhost
+authorization: Basic dGVzdDp0ZXN0
+connection: close
+
+plain file:
+
+telnet localhost 8000
+GET /hi.txt HTTP/1.1
+host: localhost
+connection: close
+
+telnet localhost 8000
+GET /hi.txt HTTP/1.1
+host: localhost
+
+telnet localhost 8000
+GET /hi.txt HTTP/1.0
+host: localhost
+
+dir listing:
+
+telnet localhost 8000
+GET / HTTP/1.1
+host: localhost
+connection: close
+
+telnet localhost 8000
+GET / HTTP/1.1
+host: localhost
+
+telnet localhost 8000
+GET / HTTP/1.0
+host: localhost
+
+scgi:
+
+telnet localhost 8000
+GET /scgi/test HTTP/1.1
+host: localhost
+connection: close
+
+telnet localhost 8000
+GET /scgi/test HTTP/1.1
+host: localhost
+
+telnet localhost 8000
+GET /scgi/test HTTP/1.0
+host: localhost
+
+
+telnet localhost 8000
+GET /bad.txt HTTP/1.1
+host: localhost
+
+telnet localhost 8000
+GET /bad.txt HTTP/1.0
+host: localhost
+
+telnet localhost 8000
+POST /scgi/test HTTP/1.1
+host: localhost
+connection: close
+expect: 100-continue
+content-length: 0
+
+telnet localhost 8000
+GET /hi.txt HTTP/1.1
+host: localhost
+connection: close
+if-range: Mon, 05 Nov 2006 21:52:23 GMT
+range: bytes=0-1,-0
+
 GET /hi.txt HTTP/1.1
 host: localhost
 connection: close
