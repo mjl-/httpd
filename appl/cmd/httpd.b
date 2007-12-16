@@ -337,14 +337,14 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(rerr != nil) {
 		hdrs.add("connection", "close");
 		op.resp = Resp.mk(HTTP_10, nil, nil, hdrs);
-		responderrmsg(op, Ebadrequest, nil);
+		responderrmsg(op, Ebadrequest, "Bad Request: parsing message: "+rerr);
 		killch <-= killpid;
 		die(id, "reading request: "+rerr);
 	}
 	if(req.major != 1) {
 		hdrs.add("connection", "close");
 		op.resp = Resp.mk(HTTP_10, nil, nil, hdrs);
-		responderrmsg(op, Ebadversion, nil);
+		responderrmsg(op, Ebadversion, sprint("HTTP Version Not Supported: version requested is HTTP/%d.%d", req.major, req.minor));
 		killch <-= killpid;
 		die(id, sprint("unsupported http version, HTTP/%d.%d", req.major, req.minor));
 	}
@@ -364,7 +364,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 
 	# we are not a proxy, this indicates a client credentials...
 	if(req.h.has("proxy-authorization", nil))
-		return responderrmsg(op, Ebadrequest, "Bad Request: You sent Proxy-Authorization creditionals");
+		return responderrmsg(op, Ebadrequest, "Bad Request: You sent Proxy-Authorization credentials");
 
 	if(req.version() >= HTTP_11 && !req.h.has("host", nil))
 		return responderrmsg(op, Ebadrequest, "Bad Request: Missing header \"Host\".");
@@ -380,19 +380,22 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		# xxx should be based on path
 		hdrs.add("allow", "OPTIONS, GET, HEAD, POST, TRACE");
 		hdrs.add("accept-ranges", "bytes");
-		return responderr(op, Eok);
+		return responderrmsg(op, Eok, nil);
 
 	PUT or DELETE =>
-		# note: when implementing these, complete support for if-match and if-none-match
-		return responderrmsg(op, Enotimplemented, nil);
+		# note: when implementing these, complete support for if-match and if-none-match, and much more probably
+		return responderrmsg(op, Enotimplemented, "Not Implemented: PUT and DELETE are not supported");
 
 	* =>
-		return responderrmsg(op, Enotimplemented, "Unknown Method");
+		return responderrmsg(op, Enotimplemented, "Unknown Method: "+http->methodstr(req.method));
 	}
 
 	path := pathsanitize(req.url.path);
 	chat(id, "path is "+path);
 
+	# we ignore the port in the host-header.  this is illegal according to rfc2616, but using it is just silly.
+	# also, we violate rfc2616 by sending 404 "not found" when the host doesn't exist.
+	# we should send 400 "bad request" then, but that is just silly too.
 	(havehost, hostdir) := req.h.find("host");
 	if(!havehost) {
 		hostdir = "_default";
@@ -430,7 +433,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		(orig, new) := hd r;
 		if(orig == path) {
 			resp.h.set("location", new);
-			return responderr(op, Emovedpermanently);
+			new = htmlescape(new);
+			return responderrmsg(op, Emovedpermanently, sprint("Moved Permanently: moved to <a href=\"%s\">%s</a>", new, new));
 		}
 	}
 
@@ -469,7 +473,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 
 	ifmatch := req.h.find("if-match").t1;
 	if(ifmatch != nil && !etagmatch(req.version(), tag, ifmatch, 1))
-		return responderr(op, Epreconditionfailed);
+		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: etags %s, specified with If-Match did not match", htmlescape(ifmatch)));
 
 	ifmodsince := parsehttpdate(req.h.find("if-modified-since").t1);
 	chat(id, sprint("ifmodsince, %d, mtime %d", ifmodsince, dir.mtime));
@@ -483,7 +487,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	ifunmodsince := parsehttpdate(req.h.find("if-unmodified-since").t1);
 	chat(id, sprint("ifunmodsince, %d", ifunmodsince));
 	if(ifunmodsince && dir.mtime > ifunmodsince)
-		return responderr(op, Epreconditionfailed);
+		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: object has been modified since %s", req.h.get("if-unmodified-since")));
 
 	if(cachesecs)
 		resp.h.add("cache-control", maxage(path));
@@ -509,7 +513,7 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 	(valid, ranges) := parserange(req.h.find("range").t1, dir);
 	if(!valid) {
 		resp.h.add("content-range", sprint("bytes */%bd", dir.length));
-		return responderr(op, Enotsatisfiable);
+		return responderrmsg(op, Enotsatisfiable, nil);
 	}
 	bound := "";
 	ifrange := req.h.find("if-range").t1;
@@ -758,7 +762,8 @@ respond(op: ref Op, st: int, errmsgstr: string, ct: string)
 	op.chunked = 0;
 	errmsg := array of byte errmsgstr;
 	op.length = big len errmsg;
-	resp.h.set("content-length", string op.length);
+	if(!(st >= 100 && st < 200 || st == 204 || st == 304))
+		resp.h.set("content-length", string op.length);
 
 	err := hresp(resp, op.fd, op.keepalive, op.chunked);
 	if(err != nil)
@@ -1045,7 +1050,7 @@ parsehttpdate(s: string): int
 	min = int hd tl htokens;
 	sec = int hd tl tl htokens;
 
-	# xxx last arg should be seconds offset for timezone
+	# last arg should be seconds offset for timezone, "luckily" http allows only gmt...
 	return daytime->tm2epoch(ref Daytime->Tm(sec, min, hour, mday, mon, year-1900, 0, 0, s[1:], 0));
 }
 

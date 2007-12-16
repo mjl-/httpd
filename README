@@ -16,9 +16,8 @@ todo:
 - better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
 - normal cgi?
 - scgi response should be done non-chunked if it sets its content-length, to allow client (and server?) to detect if it closes prematurely.
-- make error messages more useful, most current http daemons just say "bad request" without any other info.
+- date-header allows three formats, support them all...
 - http/1.0 specifics
-	* date-header allows three formats
 	* missing length for clients sending a body must result in 400, not 411? (rfcrfc1945#7.2.2)
 	* if-modified-since should be ignored for head request (rfc1945#8.1)
 
