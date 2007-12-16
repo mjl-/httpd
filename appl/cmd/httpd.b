@@ -477,7 +477,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 
 	ifmodsince := parsehttpdate(req.h.find("if-modified-since").t1);
 	chat(id, sprint("ifmodsince, %d, mtime %d", ifmodsince, dir.mtime));
-	if(ifmodsince && dir.mtime <= ifmodsince)
+	# http/1.0, head and if-modified-since: rfc1945#8.1
+	if(!(req.version() == HTTP_10 && req.method == HEAD) && ifmodsince && dir.mtime <= ifmodsince)
 		return responderr(op, Enotmodified);
 
 	ifnonematch := req.h.find("if-none-match").t1;
@@ -619,7 +620,14 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 
 		if(!req.h.has("content-length", nil)) {
 			length = big req.h.find("content-length").t1;
-			return responderrmsg(op, Elengthrequired, nil);
+			e := Elengthrequired;
+			emsg: string;
+			if(req.version() == HTTP_10) {
+				# rfc1945#7.2.2
+				e = Ebadrequest;
+				emsg = "Bad Request: Missing header Content-Length";
+			}
+			return responderrmsg(op, e, emsg);
 		}
 
 		contentenc := req.h.getlist("content-encoding");
