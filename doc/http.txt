@@ -1,0 +1,322 @@
+# introduction
+
+this document contains comments on the http/1.1 specification, as in rfc2616.  it also attempts to provide pointers for implementors, by showing common pitfalls, minimum requirements for implementations (and parts of the specification that can be skipped while remaining compliant), problems/ambiguities in the specification, examples.  this is not (yet) a full introduction to http/1.1, it may become one in the future.
+
+first an example of a contemporary http/1.1 transaction.  sent from a firefox 2.0.0.x client to a lighttpd 1.4.x server.  first the request:
+
+	GET / HTTP/1.1
+	Host: www.ueber.net
+	User-Agent: Mozilla/5.0 (X11; U; OpenBSD i386; en-US; rv:1.8.1.6) Gecko/20070819 Firefox/2.0.0.6
+	Accept: text/xml,application/xml,application/xhtml+xml,text/html;q=0.9,text/plain;q=0.8,image/png,*/*;q=0.5
+	Accept-Language: en-us,en;q=0.5
+	Accept-Encoding: gzip,deflate
+	Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7
+	Keep-Alive: 300
+	Connection: keep-alive
+	
+
+and the response:
+
+	HTTP/1.1 200 OK
+	Content-Type: text/html; charset=utf-8
+	ETag: "6646323153445497512"
+	Accept-Ranges: bytes
+	Last-Modified: Sat, 24 Feb 2007 16:35:45 GMT
+	Content-Length: 590
+	Date: Fri, 14 Dec 2007 13:38:16 GMT
+	Server: lighttpd/1.4.13
+	
+	[590 bytes of body]
+
+
+as for the request.  the first line is a method (`GET`), a path (`/`) and the http version (`HTTP/1.1`).  each separated by a single space.  lines end with CRLF, but servers should be permissive and accept a LF instead of CRLF as well.  next follow the headers, typically one per line, the colon separates the name from the value.  practically always, leading and trailing whitespace can be removed.  an empty line ends the headers.  if a body is present it follows the empty line immediately.  the length of the body is determined by the headers.
+
+the response is very similar.  only the first line is different:  it consists of the version (`HTTP/1.1`), followed by a 3-digit status code (`200`), followed by a descriptive message (`OK`).  the message leads to the end of the line and is allowed to contain spaces.  the three elements are again separated by a single space.  the body follows the empty line after the headers immediately, just like with a request.  some headers can occur only in requests, some only in responses, some in both.  some headers that are allowed in both have differing semantics based on whether they are used in a request or response.
+
+the most common requests use the methods `GET` and `POST`.  other methods, namely `HEAD`, `OPTIONS` and `TRACE` are used much less.  `PUT` and `DELETE` are not normally used in browsers, browsers just download things.  more methods have been specified for e.g. WEBDAV.  `PUT` and `DELETE` are mostly used with WEBDAV by the way.  http/1.1 also specifies `CONNECT`, which is a bit special:  it makes the http proxy/server forward the current tcp connection to some random ip:port;  used for doing the secure "https" through a proxy.
+
+in general, http gets complex very quickly due to the state-explosive combinations of requests, response statuses and the many headers.  the specification tries to describe behaviour such that new methods and headers can be specified.  unfortunately, new methods and headers can easily introduce inconsistencies.
+
+those who consider a solution to many problems, please read the following rfcs and documents:
+
+* rfc3143, "Known HTTP Proxy/Caching Problems"
+* rfc3205, "On the use of HTTP as a Substrate"
+* http://www.usenix.org/events/usenix99/invited_talks/mogul.pdf, "What’s wrong with HTTP (and why it doesn't matter)"
+
+or in short: try to avoid http where you can.
+
+
+# on http headers in general
+
+headers are of the form `field: value`.  whitespace (space/tab, or crlf followed by at least one space/tab) can, but does not have to occur before the value.  so these are all equivalent:
+
+	Content-Length:<sp>123<crlf>
+	Content-Length:123<sp><tab><crlf>
+	Content-Length:<sp><tab><sp>123<crlf>
+	Content-Length: <crlf>
+	<sp><tab>123<sp><sp><crlf>
+
+in general, whitespace can occur between tokens that make up a header, unless specically specified as not allowed.  some headers where this is not allowed: `Date` (precisely specified), `Content-Type` (actually, only the media-type in the content type).  whitespace has no meaning, it just serves to separate tokens and readability.
+
+headers aren't really hard, although the way they are specified leaves it a bit unclear how complext it is going to get.  for example, section 2.2 "basic rules" specify `comments` for headers, i.e. data with parentheses.  and comments can be nested.  parsing this with simple string functions isn't nice.  luckily, after reading the specification you'll know that only a few headers are allowed to have headers (in others, the parenteses are simply part of the value).  the headers are: `Via`, `Server`, `User-Agent`.  all headers for which the value doens't have important semantics.
+
+then about the headers whose values consists of comma-separated elements.  these are specified in bnf as `#rule`, meaning zero or more `rule`'s separated by comma's (and lws in between).  the special trick is that multiple headers with the same name may be present, and should be concatenated (with a comma as separator) when handling that header.  about duplicate header names for other headers the specification is silent.  it may be a good idea to treat duplicate headers with known semantics which don't consist of comma-separated values as invalid (i.e. respond with 400 "bad request" if a server encounters it in a request).  the order in which the headers occur is important.  the `#rule`-headers are: `Accept`, `Accept-Charset`, `Accept-Encoding`, `Accept-Language`, `Allow`, `Cache-Control`, `Connection`, `Content-Encoding`, `Content-Language`, `Expect`, `Pragma`, `Proxy-Authenticate`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, 
+
+note that some headers partially consist of `#rule`-values, but may (partially) consist of other values too.  these are not allowed to be merged.  these headers are: `Accept-Ranges`, `If-Match`, `If-None-Match`, `Vary`, `Via`, `Warning`, `WWW-Authenticate`.
+
+some header values can be "quoted-strings": double quotes around any character except controls and the double quote.  in http/1.0 that was it.  in http/1.1 quoted-string parsing has changed, a backslash is now allowed to escape a double quote.  thus, interpretation of headers should be done based on the http version of the request.
+
+
+# connections
+
+keeping connections alive after a request is an important feature in http/1.1 compared to http/1.0.  by default, http/1.1 connections are keep-alive connections.  so, after a request another request can follow.  when either the request or the response contains a `Connection: close` header, the connection will close after the response has come in.  
+
+
+# entity
+
+a _request_ has an entity when either a `Content-Length` or `Transfer-Encoding` header is present.
+
+whether a _response_ has an entity is based on request method and response status code.  section 4.3 "message body" tells us responses to a `HEAD` request do never have bodies, even if there are headers such as `Content-Length` that suggest otherwise.  the section also tells all 1xx, 204 "no content" and 304 "not modified" responses to not have bodies.  all other responses do have bodies (though maybe of zero length).
+
+now for the length of the entity if it is present.  first, if `Transfer-Encoding` has a value other than `identity`, the response is in chunked mode, which is self-delimiting.  if a `Content-Length` is present, it is the length in bytes.  note that both headers should not be present in a single request/response;  if they are, `Content-Length` must be ignored.  this strikes me as odd:  if `Transfer-Encoding: identity` is present, how would you determine the length?  next section 4.4 "message length" describes that a `Content-Type` with media-type `multipart/byteranges` is self-delimiting and thus doesn't need a `Transfer-Encoding` or `Content-Length`.  they could have just required chunked transfer-encoding for that case... the last way of determining the length, only when none of the just mentioned methods apply, is to simply to end of file.  this is mostly for http/1.0 backwards compatibility but is also used between http/1.1-only transactions.  actually, this last method is quite unsatisfactory:  it doesn't allow detecting if a remote server is shutdown (causing its tcp connections to close, i.e. without timing out).
+
+
+# forward compatibility
+
+rfc2616 sprinkles information on how unrecognized http versions, methods, response statuses, header names and header values should be handled throughout the specification.  the goal is to allow future http versions/extensions to be specified without breaking older clients.  this section contains this data.
+
+1. unknown http versions (section 3.1 "http version").  a higher minor version implies newer message semantics but **not** new message parsing algorithms.  i.e. the new version may have new headers.  the new version will probably be specified such that http/1.1 interpreters of the message will stuff handle the message correctly.  a higher major version implies new message parsing semantics.  thus, if the server is even able to detect the http version in the message with a new major version (a new specification will probably make sure it is), it cannot assume it correctly parsed the message and thus must respond with 505 "http version not supported".  a request in unknown minor version should probably be handled as the highest known minor version understood.  care must be taken to respond properly to unknown values in headers.  the specification explicitly defines what to do for some headers.  unfortuantely, in practice all bets are probably off:  the http/1.0 specification prescribes practically the same, but still http/1.1 messages are parsed differently (chunked encoding isn't present in http/1.0) and the major version number has not been incremented.
+
+2. unknown http methods (section 5.1.1, "method").  methods that are specified but not implemented (e.g. `PUT`), or not completely unrecognized must be responded to with 501 "not implemented".
+
+3. unknown http header names.  this one is easy, unrecognized names should simply be ignored.  this is an explicit forward-compatibility thing.
+
+4. unknown http header values.  this is one is much more tricky.  some headers with invalid values should be ignored.  xxx should some be responded to with a "bad request"?  for some header names a few values are specified and extension values are explicitly allowed in the BNF.  how to handle these unknown values varies.  how invalid values should be handled isn't always clear as well.  the next listing attempts to provide sane defaults.
+
+	* `If-Modified-Since` and `If-Unmodified-Since`: if the date is invalid, it should be ignored.  i think 400 "bad request" would have been better.
+	* `Cache-Control` explictly allows extensions.  they are supposedly designed such that they can be ignored.  the extension is supposed to override the default caching directives that apply or are specified in the header for backwards compatibility.  too bad, cache-control is already too complex.
+	* `Content-Encoding` implies a 415 "unsupported media type" should be sent for unknown encodings.  unknown encodings aren't really allowed, all valid encodings are specified in section 3.5.
+	* `Content-Length`, although 14.13 doesn't say what to do for invalid values, the only proper interpration is "bad request" or "bad response".
+	* `Content-Type`, again, sections 14.17 and 7.2.1 do not specify how to handle invalid values.  if the content-type is not specified, it can safely be assumed to be application/octet-stream (which can be responded to with 415 "unsupported media type").  if the value is syntactically invalid, it should probably be treated as a 400 "bad request".
+	* `Expect`:  the only value specified is `100-continue`.  if the value is unknown, an error should be returned according to section 14.20.  400 "bad request" seems appropriate.  if the value is known but cannot be met, 417 "expectation failed" applies.
+	* `Host`: this header must be present in all requests.  the really silly thing:  if the host is not a valid host on the server (i.e. the server doesn't know the host), a 400 "bad request" must be returned.  404 "file not found" sounds so much better, there is nothing "bad" about the request.
+	* `If-Match`: section 14.24, typically used to safely overwrite a file with a `PUT` request.  bad values should be responded to with 400 "bad request" to be safe.  The same goes for `If-Modified-Since` from section 14.28.
+	* `Transfer-Encoding`:  section 14.41.  again, nothing is said about unknown encodings.  however, if you don't understand how a message if formed, the only useful action seems to be not to interpret it.  400 "bad request" probably comes closest.
+	* `Vary`:  section 14.44, again nothing specified about invalid values.  the safe option seems to treat the value as `*`, the most restrictive and safe value.
+	* many other headers are optional.  e.g. `Date`, `ETag`, `If-None-Match, `Last-Modified` only provide additional services (caching).  `Range` provides partial file serving.  if they are invalid, they are safe to igore.  in my opinion it is usually better to point the program to its error rather than guessing what the programs intentions were, but that is not what the specification says.
+
+# minimal implementation & http in practice
+
+bad for us:  the http/1.1 specification is pretty large.
+good for us:  we can safely ignore parts of it.  and some parts are only for clients, proxies and/or servers.
+
+as for methods, only `GET` and `HEAD` are mandatory.  a webserver without `POST` is crippled.  `OPTIONS` and `TRACE` aren't very useful but aren't that hard to implement either.
+
+## ignorable headers
+
+we can cut a lot more in headers we need to support.  first, headers that are completely irrelevant to servers:  `Age`, `Max-Forwards`, `Proxy-Authenticate`, `Via`, `Warning`.  these are only for caches (e.g. proxies).
+
+next, some incoming headers have no influence on responses and can safely be ignored: `From`, `Referer`, `User-Agent`.  these may be useful for logging in their raw form.
+
+now, yet another set of headers "should" or "may" be handled, but are not (useful) in practice: `Accept`, `Accept-Charset`, `Accept-Encoding`, `Accept-Language`, `Content-Location`, `Content-MD5`, `TE`, `Upgrade`.
+
+## mandatory/useful headers
+
+then, another set of headers are only generated by servers, not received.  generating headers is usually far easier to implement than parsing them.  they are:  `Allow`, `Accept-Ranges`, `ETag`, `Expires`, `Last-Modified`, `Location`, `Server`, `Vary`, `WWW-Authenticate`.  these headers can be generated by both clients and servers, but the server can ignore them when they come from a client:  `Date`, `Cache-Control`, `Pragma`, `Trailer`.
+
+headers that clients send but can safely be ignored, but are quite useful and recommended to be implemented: `Authorization`, `If-Modified-Since`, `If-None-Match`, `If-Range`, `Range`.  note: `Content-Range` is also only generated by a server, though not entirely trivial.  it is a response to the `Range` header.
+
+headers that clients send and really really should be implemented (perhaps partially): `Connection`, `Content-Encoding`, `Content-Length`, `Content-Type`, `Expect`, `Host`, `If-Match`, `If-Unmodified-Since`, `Transfer-Encoding`.
+
+for security, some headers should be handled specially.  when a `Proxy-Authorization` is sent to a server it should respond with 400 "bad request", this should just never happen.  when a `Authorization` header is sent for a path on a server that doesn't need authentication, it should only be accepted when the user/pass are empty strings;  for anything else, a 401 "unauthorized" should be send.
+
+# on specific headers
+
+## `Connection`
+
+if one of the values (it is a comma-separated list) is `close`, the connection will be closed.  the response should also include a `Connection: close` header.  other values can safely be ignored.
+
+## `Content-Encoding`
+
+the server can generated this, e.g. for sending compressed data.  the client can send this for a `POST` too, though it doesn't seem to be common practice.  there is no good reason it isn't though.
+
+## `Content-Length`
+
+if present, and `Transfer-Encoding` is not present, this denotes the size of the message body.  if `Transfer-Encoding` is present (they shouldn't both be), `Content-Length` should be ignored.
+
+## `Content-Type`
+
+it should be present whenever an entity is sent.  if it isn't, `application/octet-stream` may be assumed.  otherwise, remember to specify a decent `charset` for the data if it is `text/*`, e.g.: `Content-Type: text/html; charset=utf-8`.
+
+## `Expect`
+
+only relevant for `POST`.  if the value is not (case-insensitive) `100-continue`, or if it is but the request is not acceptable, send 417 "expectation failed".  note that `100-continue` will usually have to be handled by the programs that handle the `POST` request, which is usually a separate process started by the webserver.
+
+## `Host`
+
+_All_ requests must have a `Host` header (see section 9).  Even if it isn't used, e.g. for `TRACE` requests.  Also, when the path, specified after the method, is a full URL, the `Host` must still be present but must also be ignored.
+
+## `If-Match` and `If-Unmodified-Since`
+
+only mandatory for `PUT` and `DELETE`, to make operations safe.  are not really useful for `GET` etc.
+
+## `Transfer-Encoding`
+
+when present, in practice it has the value `chunked`.  this one is "funny" to read about in rfc2616.  first, according to section 14.41 multiple transformations can be applied to message.  thus, we are allowed to send `Transfer-Encoding: chunked, chunked`, and wrap one chunk-stream in another.  utterly silly and annoying.  xxx check how many clients support this.
+
+on the other hand:  section 4.4, list item 2, says that if the value is anything other than `identity` it means it is simply chunked.  though that section implies something other hilarious again.
+
+***
+
+## `Allow`
+
+send this comma-separated value in response to an `OPTIONS` request.  not much use sending it otherwise, though you are allowed to.
+
+## `Accept-Ranges`
+
+you can send this with value `bytes` if you support range requests (with the `Range` request-header and `Content-Range` response-header).  it isn't required though, clients can always try to send range requests.  it is probably useful to send this for `OPTIONS` requests.
+
+## `ETag`
+
+these are only mandatory for `Range` requests.  they are very useful for caching since they specify the version of a file uniquely.  the older (and seemingly more popular, even in this century) habit of using timestamps with second-precision has only disadvantages.
+
+etags are simply quoted strings that represent the entity uniquely.  the SHA-1 hash of the contents can be used, but this usually isn't feasible.  better:  the SHA-1 hash of the concatenatino of: last modification time (of the file or of the data generated content is based on), requested URL (host, port, path, query), file modification count.
+
+the etag should normally be about the entity returned (e.g. with a 200 "OK" response) or not returned (e.g. with a 304 "not modified" response).  for 201 "created", the etag is about the object created, not the response.  it doesn't make much sense to return etags in error responses, such as 404 "file not found", they would have to be about the error message, which isn't useful.
+
+## `Expires`
+
+used for specifying how long an entity can be cached.  data that should not be cached can send a date string in the past, or equal to the current date minus approximately a year (this comes from the specification indeed..., section 14.21).  but that's mostly for compatibility with http/1.0.  sending a `Cache-Control: max-age=0` is preferred (by me at least).
+
+## `Last-Modified`
+
+the last modification time of the file or data the entity is based on, as a date string.  the value is again used by clients in conditional requests, with the `If-Unmodified-Since` header.  there is no reason not to include it when an mtime is available.
+
+## `Location`
+
+an url pointing to an object.  should be present in: 301 "moved permanently", 302 "found", 303 "see other", 307 "temporary redirect";  may be present in: 300 "multiple choices"
+
+a 305 "use proxy" should have a location header pointing to a proxy.  this response doesn't make much sense though.
+
+in practice, just implement for the 3xx responses mentioned above.
+
+## `Server`
+
+an identification of the server.  is not mandatory, but useful for debugging and statistics.  note that this isn't free-form, use `name/version`, e.g. `myhttpd/1`.
+
+## `Vary`
+
+used for specifying (to a cache) which headers were used in content negotiation.  if the value is `*`, other elements than headers have influenced the representation chosen.  otherwise, it is a comma-separated list of header fields.  a cache may return a previously returned response if the headers listed are identical and the other caching headers are valid.
+
+## `WWW-Authenticate`
+
+must be present in a 401 "unauthorized".  specified in rfc 2617.  "basic" authorization just sends plaintext username/passwords.  "digest" authorization uses a challenge.  not great.
+
+***
+
+## `Date`
+
+the date the client/server created the request/response.  no reason not to include it.
+
+## `Cache-Control`
+
+this header as many pages in the rfc describing its behaviour.  if you want things explicitly uncacheable, make the server return `max-age=0`.  safe to ignore otherwise, mostly relevant for caches.
+
+## `Pragma`
+
+for backwards compatibility.  http/1.0 used this for caching.  when making an object explicitly uncacheable, set it to `no-cache`.  safe to ignore otherwise.
+
+## `Trailer`
+
+comma-separated list of headers that will be present in the trailing headers after the chunk-encoded stream.  there is rarely a reason to need and implement this.  trailing headers must be explicitly allowed.  safe to ignore.
+
+
+# on http quirks
+
+this section describes some strange things about http/1.1.
+
+servers should ignore empty lines at the beginning of a request.  for being lenient towards crappy clients.
+
+quality values in headers, e.g. `q=0.2` are a bit silly.  e.g. these are all valid values: `0.`, `0.0`, `0`, `0.000`.  do they all have the same semantics?  elsewhere in the specification, special meaning is assigned to a value of `0`.  do they mean the floating point value zero?  simply picking numbers from 0-1000 would have been easier.
+
+needing to understand three forms of dates...
+
+full url should be understood by servers, but Host: must always be present.  if a full url is present, the Host header must simply be ignored.
+
+a Host: header should include the port the request came in on.  this is useless, the server can always determine which port it was.  a client can lie about this.  the hostname is different of course, that's what the host header is for.
+
+section 4.4, list item 2 claims that a message has `Transfer-Encoding` with a value other than `identity`, it means the transfer encoding is chunked, "unless the message is terminated by closing the connection".  this implies a response with such a header value will have to be treated as chunked and buffered somewhere, and if the connection ends before the proper end-of-chunked-stream message has come in, the entire chunked stream (with chunk messages) will retroactively have to be interpreted as a literal stream.  hilarious.  sad.
+
+a cache is only allowed to combine range requests if the etag is strongly equivalent.  sure.  a client, however, is not granted the same protection, it is allowed (well, not forbidden as with caches) to combine the responses.  it doesn't make sense to specify this restriction just for caches.
+
+the whole idea of using timestamps with second-precision for caching isn't great.  the way the timestamp is specified is even more ridiculous.  the fact that entities can be conditionally retrieved based on the timestamp is even more silly given that etags are so much more useful for that.
+
+# on http/1.0 compatibility
+
+xxx to write
+mention headers new to http/1.1, which must be ignored for http/1.0.
+mention new status response codes and when they are used.
+new methods?  aren't defined right?
+
+http/1.0 headers:
+- Allow
+- Authorization
+- Content-Encoding
+- Content-Length
+- Content-Type
+- Date
+- Expires
+- From
+- If-Modified-Since
+- Last-Modified
+- Location
+- Pragma
+- Referer
+- Server
+- User-Agent
+- WWW-Authenticate
+
+new in http/1.1:
+- Accept
+- Accept-Charset
+- Accept-Encoding
+- Accept-Language
+- Accept-Ranges
+- Age
+- Cache-Control
+- Connection
+- Content-Language
+- Content-Location
+- Content-MD5
+- Content-Range
+- ETag
+- Expect
+- Host
+- If-Match
+- If-None-Match
+- If-Range
+- If-Unmodified-Since
+- Max-Forwards
+- Proxy-Authenticate
+- Proxy-Authorization
+- Range
+- Retry-After
+- TE
+- Trailer
+- Transfer-Encoding
+- Upgrade
+- Vary
+- Via
+- Warning
+
+sending headers such as `ETag` to a http/1.0 client is not a problem, clients should not do anything with them.  some incoming headers should really be handled for http/1.1 only:
+- Expect
+- If-Match
+- If-None-Match
+- If-Range
+- If-Unmodified-Since
+- Range
+- Transfer-Encoding
+
+missing length for clients sending a body must result in 400, not 411? (rfcrfc1945#7.2.2)
+if-modified-since should be ignored for head request (rfc1945#8.1)
