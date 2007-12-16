@@ -909,6 +909,34 @@ httpdate(t: int): string
 	return sprint("%s, %02d %s %d %02d:%02d:%02d GMT", days[tm.wday], tm.mday, months[tm.mon], tm.year+1900, tm.hour, tm.min, tm.sec);
 }
 
+readtoken(s: string): (string, string)
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] < ' ' || str->in(s[i], "()<>@,;:\\\"/[]?={} \t"))
+			break;
+	return (s[:i], s[i:]);
+}
+
+# for http/1.1 a backslash may be used for escaping, not for http/1.0
+readqs(s: string, v: int): (string, string, string)
+{
+	if(s == nil)
+		return (nil, nil, nil);
+	if(s[0] != '"')
+		return (nil, nil, "value does not start with double quote");
+	r := "";
+	for(i := 0; i < len s; i++)
+		if(s[i] < ' ')
+			return (nil, nil, "invalid control character found inside quoted string");
+		else if(s[i] == '"')
+			return (s[1:i], s[i+1:], nil);
+		else if(v == HTTP_11 && s[i] == '\\' && i+1 < len s && s[i+1] == '"')
+			r[len r] = s[++i];
+		else
+			r[len r] = s[i];
+	return (nil, nil, "quoted string not ended");
+}
+
 parsehttpdate(s: string): int
 {
 	mday, mon, year, hour, min, sec: int;
@@ -939,18 +967,23 @@ parserange(range: string, dir: Sys->Dir): (int, list of (big, big))
 	if(range == nil)
 		return (1, nil);
 
-	if(!str->prefix("bytes=", range))
+	if(!str->prefix("bytes", range))
 		return (0, nil);
-	range = range[len "bytes=":];
+	range = range[len "bytes":];
+	range = str->drop(range, " \t");
+	if(!str->prefix("=", range))
+		return (0, nil);
+	range = str->drop(range[1:], " \t");
+
 	r: list of (big, big);
 	valid := 0;
 	for(l := sys->tokenize(range, ",").t1; l != nil; l = tl l) {
-		s := hd l;
+		s := strip(hd l, " \t");
 		if(s == nil)
-			return (1, nil);
+			continue;
 		if(s[0] == '-') {
 			# single (negative) byte offset relative to end of file
-			s = s[1:];
+			s = str->drop(s[1:], " \t");
 			if(s == nil || str->drop(s, "0-9") != nil)
 				return (1, nil);
 			if(big s != big 0)
@@ -964,11 +997,11 @@ parserange(range: string, dir: Sys->Dir): (int, list of (big, big))
 			r = (i, dir.length)::r;
 		} else {
 			(first, last) := str->splitstrl(s, "-");
-			if(str->drop(first, "0-9") != nil || last == nil || str->drop(last[1:], "0-9") != nil)
+			if(stripws(str->drop(first, "0-9")) != nil || last == nil || str->drop(stripws(last[1:]), "0-9") != nil)
 				return (1, nil);
 			f := big first;
 			e := dir.length;
-			last = last[1:];
+			last = stripws(last[1:]);
 			if(last != nil)
 				e = big last+big 1;
 			if(e > dir.length)
@@ -1007,6 +1040,11 @@ statusmsg(code: int): string
 strip(s, cl: string): string
 {
 	return droptl(str->drop(s, cl), cl);
+}
+
+stripws(s: string): string
+{
+	return strip(s, " \t");
 }
 
 droptl(s, cl: string): string
