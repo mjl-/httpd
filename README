@@ -12,7 +12,7 @@ features:
 
 todo:
 - scgi response should be done non-chunked if it sets its content-length, to allow client (and server?) to detect if it closes prematurely.
-- date-header allows three formats, support them all...
+- date-header allows three formats.  support only one and generate errors for the others.
 - scgid timeouts
 - better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
 - normal cgi?

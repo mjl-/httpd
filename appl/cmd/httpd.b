@@ -413,7 +413,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	haveauth := needauth := 0;
 	realm: string;
 	which, cred: string;
-	(which, cred) = str->splitstrr(req.h.find("authorization").t1, " ");
+	(which, cred) = str->splitstrr(req.h.get("authorization"), " ");
 	if(str->tolower(which) != "basic ")
 		cred = nil;
 	for(a := auths; !haveauth && a != nil; a = tl a) {
@@ -471,21 +471,21 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	tag := etag(path, op, dir);
 	resp.h.add("etag", tag);
 
-	ifmatch := req.h.find("if-match").t1;
+	ifmatch := req.h.get("if-match");
 	if(req.version() >= HTTP_11 && ifmatch != nil && !etagmatch(req.version(), tag, ifmatch, 1))
 		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: etags %s, specified with If-Match did not match", htmlescape(ifmatch)));
 
-	ifmodsince := parsehttpdate(req.h.find("if-modified-since").t1);
+	ifmodsince := parsehttpdate(req.h.get("if-modified-since"));
 	chat(id, sprint("ifmodsince, %d, mtime %d", ifmodsince, dir.mtime));
 	# http/1.0, head and if-modified-since: rfc1945#8.1
 	if(!(req.version() == HTTP_10 && req.method == HEAD) && ifmodsince && dir.mtime <= ifmodsince)
 		return responderr(op, Enotmodified);
 
-	ifnonematch := req.h.find("if-none-match").t1;
+	ifnonematch := req.h.get("if-none-match");
 	if(req.version() >= HTTP_11 && ifnonematch != nil && req.method == GET && etagmatch(req.version(), tag, ifnonematch, 0))
 		return responderr(op, Enotmodified);
 
-	ifunmodsince := parsehttpdate(req.h.find("if-unmodified-since").t1);
+	ifunmodsince := parsehttpdate(req.h.get("if-unmodified-since"));
 	chat(id, sprint("ifunmodsince, %d", ifunmodsince));
 	if(req.version() >= HTTP_11 && ifunmodsince && dir.mtime > ifunmodsince)
 		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: object has been modified since %s", req.h.get("if-unmodified-since")));
@@ -511,13 +511,13 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 	op.length = dir.length;
 	resp.h.add("content-length", string op.length);
 
-	(valid, ranges) := parserange(req.version(), req.h.find("range").t1, dir);
+	(valid, ranges) := parserange(req.version(), req.h.get("range"), dir);
 	if(!valid) {
 		resp.h.add("content-range", sprint("bytes */%bd", dir.length));
 		return responderrmsg(op, Enotsatisfiable, nil);
 	}
 	bound := "";
-	ifrange := req.h.find("if-range").t1;
+	ifrange := req.h.get("if-range");
 	if(ranges != nil && (ifrange == nil
 	                     || ifrange[0] == '"' && tag == ifrange
 	                     || dir.mtime <= parsehttpdate(ifrange))) {
@@ -619,7 +619,7 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 			return responderrmsg(op, Enotimplemented, "Not Implemented: Transfer-Encodings other than identity (i.e. no transfer encoding) are not supported (note: Only single values in the simplest syntax are accepted)");
 
 		if(!req.h.has("content-length", nil)) {
-			length = big req.h.find("content-length").t1;
+			length = big req.h.get("content-length");
 			e := Elengthrequired;
 			emsg: string;
 			if(req.version() == HTTP_10) {
@@ -809,7 +809,7 @@ mkhtml(msg: string): string
 
 etag(path: string, op: ref Op, dir: Sys->Dir): string
 {
-	host := op.req.h.find("host").t1;
+	host := op.req.h.get("host");
 	if(host == nil)
 		host = "_default";
 	return "\""+sha1(array of byte sprint("%d,%d,%s,%s,%s", dir.qid.vers, dir.mtime, host, op.lport, path))+"\"";
@@ -826,7 +826,7 @@ accesslog(op: ref Op)
 	if(!op.chunked)
 		length = string op.length;
 	if(accessfd != nil && op.req != nil)
-		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.url.pack(), sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg, length, op.req.h.find("user-agent").t1);
+		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.url.pack(), sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg, length, op.req.h.get("user-agent"));
 }
 
 findscgi(path: string): (string, string)
@@ -896,7 +896,7 @@ pathurls(s: string): string
 
 scgirequest(path, scgipath: string, req: ref Req, op: ref Op, length: big): array of byte
 {
-	servername := req.h.find("host").t1;
+	servername := req.h.get("host");
 	if(servername == nil)
 		servername = op.lhost;
 	pathinfo := path[len scgipath:];
@@ -1037,6 +1037,8 @@ tokenizeqs(s: string, v: int): (list of string, string)
 	return (rev(r), nil);
 }
 
+# i'm not going to parse three different date formats where a simple number would have sufficed.
+# death to the bloat monster!
 parsehttpdate(s: string): int
 {
 	mday, mon, year, hour, min, sec: int;
