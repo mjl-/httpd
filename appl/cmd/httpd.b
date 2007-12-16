@@ -336,7 +336,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 
 	# all values besides "close" are supposedly header names, not important
 	(contoks, conerr) := tokenize(req.h.getlist("connection"));
-	op.keepalive = req.version() >= HTTP_11 && conerr == nil && !listhas(contoks, "close");
+	op.keepalive = req.version() >= HTTP_11 && conerr == nil && !listhas(listlower(contoks), "close");
 	op.resp = resp := Resp.mk(req.version(), "200", "OK", hdrs);
 
 	# we are not a proxy, this indicates a client credentials...
@@ -589,7 +589,7 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 		return responderrmsg(op, Elengthrequired, nil);
 	}
 
-	if(req.method == POST && (expect := req.h.find("expect").t1) != nil && req.version() >= HTTP_11) {
+	if(req.method == POST && req.version() >= HTTP_11 && (expect := req.h.find("expect").t1) != nil) {
 		if(str->tolower(expect) != "100-continue")
 			return responderrmsg(op, Eexpectationfailed, sprint("Unrecognized Expectectation: %q", expect));
 		fprint(op.fd, "HTTP/1.1 100 continue\r\n\r\n");
@@ -1159,6 +1159,14 @@ sha1(a: array of byte): string
 	r := array[keyring->SHA1dlen] of byte;
 	keyring->sha1(a, len a, r, nil);
 	return byte2str(r);
+}
+
+listlower(l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = str->tolower(hd l)::r;
+	return rev(r);
 }
 
 listhas(l: list of string, s: string): int
