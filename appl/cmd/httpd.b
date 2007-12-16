@@ -336,6 +336,10 @@ httptransact(pid: int, b: ref Iobuf, op: Op)
 	op.keepalive = req.version() >= HTTP_11 && !req.h.has("connection", "close");
 	op.resp = resp := Resp.mk(req.version(), "200", "OK", hdrs);
 
+	# we are not a proxy, this indicates a client credentials...
+	if(req.h.has("proxy-authorization", nil))
+		return responderrmsg(op, Ebadrequest, "Bad Request: Your HTTP client accidentally sent Proxy-Authorization creditionals");
+
 	if(req.version() >= HTTP_11 && !req.h.has("host", nil))
 		return responderrmsg(op, Ebadrequest, "Bad Request: Missing header \"Host\".");
 
