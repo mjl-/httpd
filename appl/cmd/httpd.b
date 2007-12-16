@@ -438,7 +438,7 @@ httptransact(pid: int, b: ref Iobuf, op: Op)
 	resp.h.add("etag", tag);
 
 	ifmatch := req.h.find("if-match").t1;
-	if(ifmatch != nil && !etagmatch(tag, ifmatch, 1))
+	if(ifmatch != nil && !etagmatch(req.version(), tag, ifmatch, 1))
 		return responderr(op, Epreconditionfailed);
 
 	ifmodsince := parsehttpdate(req.h.find("if-modified-since").t1);
@@ -447,8 +447,8 @@ httptransact(pid: int, b: ref Iobuf, op: Op)
 		return responderr(op, Enotmodified);
 
 	ifnonematch := req.h.find("if-none-match").t1;
-	if(ifnonematch != nil && req.method != HEAD && req.method != GET && etagmatch(tag, ifnonematch, 0))
-		return responderr(op, Epreconditionfailed);
+	if(ifnonematch != nil && req.method == GET && etagmatch(req.version(), tag, ifnonematch, 0))
+		return responderr(op, Enotmodified);
 
 	ifunmodsince := parsehttpdate(req.h.find("if-unmodified-since").t1);
 	chat(id, sprint("ifunmodsince, %d", ifunmodsince));
@@ -923,18 +923,39 @@ readqs(s: string, v: int): (string, string, string)
 	if(s == nil)
 		return (nil, nil, nil);
 	if(s[0] != '"')
-		return (nil, nil, "value does not start with double quote");
-	r := "";
-	for(i := 0; i < len s; i++)
+		return (nil, s, nil);
+	r := "\"";
+	for(i := 1; i < len s; i++)
 		if(s[i] < ' ')
 			return (nil, nil, "invalid control character found inside quoted string");
-		else if(s[i] == '"')
-			return (s[1:i], s[i+1:], nil);
 		else if(v == HTTP_11 && s[i] == '\\' && i+1 < len s && s[i+1] == '"')
 			r[len r] = s[++i];
-		else
+		else {
 			r[len r] = s[i];
+			if(s[i] == '"')
+				return (r, s[i+1:], nil);
+		}
 	return (nil, nil, "quoted string not ended");
+}
+
+tokenizeqs(s: string, v: int): (list of string, string)
+{
+	r: list of string;
+	qs, err: string;
+	for(;;) {
+		(qs, s, err) = readqs(s, v);
+		if(err != nil)
+			return (nil, err);
+		if(qs != nil)
+			r = qs::r;
+		s = str->drop(s, " \t");
+		if(s == nil)
+			break;
+		if(s[0] != ',')
+			return (nil, "expected comma as separator");
+		s = str->drop(s[1:], " \t");
+	}
+	return (rev(r), nil);
 }
 
 parsehttpdate(s: string): int
@@ -1017,15 +1038,16 @@ parserange(range: string, dir: Sys->Dir): (int, list of (big, big))
 	return (valid, rev1(r));
 }
 
-etagmatch(etag: string, etagstr: string, strong: int): int
+etagmatch(version: int, etag: string, etagstr: string, strong: int): int
 {
 	if(etagstr == "*")
 		return 1;
-	for(l := sys->tokenize(etagstr, ",").t1; l != nil; l = tl l) {
-		t := strip(hd l, " \t");
-		if(t == etag && (!strong || !str->prefix("W/", t)))
+	(l, err) := tokenizeqs(etagstr, version);
+	if(err != nil)
+		return 0;	# xxx respond with "bad request"?
+	for(; l != nil; l = tl l)
+		if(hd l == etag && (!strong || !str->prefix("W/", hd l)))
 			return 1;
-	}
 	return 0;
 }
 
