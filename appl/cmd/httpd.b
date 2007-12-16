@@ -102,6 +102,7 @@ Enotsatisfiable:	con 416;
 Eexpectationfailed:	con 417;
 Eservererror:		con 500;
 Enotimplemented:	con 501;
+Ebadversion:		con 505;
 
 statusmsgs := array[] of {
 	(100,		"Continue"),
@@ -120,6 +121,7 @@ statusmsgs := array[] of {
 	(417,		"Expectation Failed"),
 	(500,		"Internal Server Error"),
 	(501,		"Not Implemented"),
+	(505,		"HTTP Version Not Supported"),
 };
 
 idch: chan of int;
@@ -316,18 +318,25 @@ httptransact(pid: int, b: ref Iobuf, op: Op)
 	hdrs.add("date", httpdate(op.now));
 	if(rerr != nil) {
 		hdrs.add("connection", "close");
-		op.resp = ref Resp(HTTP_10, nil, nil, hdrs);
+		op.resp = Resp.mk(HTTP_10, nil, nil, hdrs);
 		responderrmsg(op, Ebadrequest, nil);
 		killch <-= killpid;
 		die(id, "reading request: "+rerr);
 	}
+	if(req.major != 1) {
+		hdrs.add("connection", "close");
+		op.resp = Resp.mk(HTTP_10, nil, nil, hdrs);
+		responderrmsg(op, Ebadversion, nil);
+		killch <-= killpid;
+		die(id, sprint("unsupported http version, HTTP/%d.%d", req.major, req.minor));
+	}
 	killch <-= killpid;
-	chat(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), http->versionstr(req.version)));
+	chat(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), sprint("HTTP/%d.%d", req.major, req.minor)));
 	op.req = req;
-	op.keepalive = req.version == HTTP_11 && !req.h.has("connection", "close");
-	op.resp = resp := ref Resp(req.version, "200", "OK", hdrs);
+	op.keepalive = req.version() == HTTP_11 && !req.h.has("connection", "close");
+	op.resp = resp := Resp.mk(req.version(), "200", "OK", hdrs);
 
-	if(req.version == HTTP_11 && !req.h.has("host", nil))
+	if(req.version() == HTTP_11 && !req.h.has("host", nil))
 		return responderrmsg(op, Ebadrequest, "Bad Request: Missing header \"Host\".");
 
 	case req.method {
@@ -573,7 +582,7 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 		return responderrmsg(op, Elengthrequired, nil);
 	}
 
-	if(req.method == POST && (expect := req.h.find("expect").t1) != nil && req.version == HTTP_11) {
+	if(req.method == POST && (expect := req.h.find("expect").t1) != nil && req.version() == HTTP_11) {
 		if(str->tolower(expect) != "100-continue")
 			return responderrmsg(op, Eexpectationfailed, sprint("Unrecognized Expectectation: %q", expect));
 		fprint(op.fd, "HTTP/1.1 100 continue\r\n\r\n");
@@ -760,7 +769,7 @@ accesslog(op: Op)
 	if(!op.chunked)
 		length = string op.length;
 	if(accessfd != nil && op.req != nil)
-		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.url.pack(), http->versionstr(op.req.version), op.resp.st, op.resp.stmsg, length, op.req.h.find("user-agent").t1);
+		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.url.pack(), sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg, length, op.req.h.find("user-agent").t1);
 }
 
 findscgi(path: string): (string, string)
@@ -836,7 +845,7 @@ scgirequest(path, scgipath: string, req: ref Req, op: Op, length: big): array of
 	pathinfo := path[len scgipath:];
 	l  :=	("CONTENT_LENGTH",	string length)::
 		("GATEWAY_INTERFACE",	"CGI/1.1")::
-		("SERVER_PROTOCOL",	http->versionstr(req.version))::
+		("SERVER_PROTOCOL",	http->versionstr(req.version()))::
 		("SERVER_NAME",		servername)::
 		("SCGI",		"1")::
 		("REQUEST_METHOD",	http->methodstr(req.method))::

@@ -12,7 +12,6 @@ features:
 
 todo:
 - ignore some http/1.1 headers for http/1.0 requests?  e.g. range, many more
-- what to do for requests for versions > http/1.1?  do something sane
 - vary header, content-range? if-none-match? many more?
 - scgid timeouts
 - headers: accept-*, more
