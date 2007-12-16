@@ -124,6 +124,22 @@ statusmsgs := array[] of {
 	(505,		"HTTP Version Not Supported"),
 };
 
+# relevant known request headers whose values are not allowed to be concatenated (not a full bnf #-rule)
+nomergeheaders := array[] of {
+	# these two would be useful to merge.  alas, it is not allowed by rfc2616, section 4.2, last paragraph
+	"if-match",
+	"if-none-match",
+
+	"authorization",
+	"content-length",
+	"content-type",
+	"host",
+	"if-modified-since",
+	"if-range",
+	"if-unmodified-since",
+	"range",
+};
+
 idch: chan of int;
 randch: chan of int;
 killch: chan of int;
@@ -339,9 +355,14 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	op.keepalive = req.version() >= HTTP_11 && conerr == nil && !listhas(listlower(contoks), "close");
 	op.resp = resp := Resp.mk(req.version(), "200", "OK", hdrs);
 
+	# tell client if it is sending ambiguous requests: duplicate headers of the important kind
+	for(i := 0; i < len nomergeheaders; i++)
+		if(len req.h.findall(nomergeheaders[i]) > 1)
+			return responderrmsg(op, Ebadrequest, sprint("Bad Request: You sent duplicate headers for \"%s\"", nomergeheaders[i]));
+
 	# we are not a proxy, this indicates a client credentials...
 	if(req.h.has("proxy-authorization", nil))
-		return responderrmsg(op, Ebadrequest, "Bad Request: Your HTTP client accidentally sent Proxy-Authorization creditionals");
+		return responderrmsg(op, Ebadrequest, "Bad Request: You sent Proxy-Authorization creditionals");
 
 	if(req.version() >= HTTP_11 && !req.h.has("host", nil))
 		return responderrmsg(op, Ebadrequest, "Bad Request: Missing header \"Host\".");

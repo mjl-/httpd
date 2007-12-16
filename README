@@ -11,8 +11,6 @@ features:
 - redirections
 
 todo:
-- headers:
-	- return "bad request" when a known non-#rule header that is used for the request occurs twice in request
 - handle transfer-encoding from client: send error if not identity
 - ignore some http/1.1 headers for http/1.0 requests?  e.g. range, many more
 - scgid timeouts
