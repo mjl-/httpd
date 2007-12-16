@@ -472,7 +472,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	resp.h.add("etag", tag);
 
 	ifmatch := req.h.find("if-match").t1;
-	if(ifmatch != nil && !etagmatch(req.version(), tag, ifmatch, 1))
+	if(req.version() >= HTTP_11 && ifmatch != nil && !etagmatch(req.version(), tag, ifmatch, 1))
 		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: etags %s, specified with If-Match did not match", htmlescape(ifmatch)));
 
 	ifmodsince := parsehttpdate(req.h.find("if-modified-since").t1);
@@ -482,12 +482,12 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		return responderr(op, Enotmodified);
 
 	ifnonematch := req.h.find("if-none-match").t1;
-	if(ifnonematch != nil && req.method == GET && etagmatch(req.version(), tag, ifnonematch, 0))
+	if(req.version() >= HTTP_11 && ifnonematch != nil && req.method == GET && etagmatch(req.version(), tag, ifnonematch, 0))
 		return responderr(op, Enotmodified);
 
 	ifunmodsince := parsehttpdate(req.h.find("if-unmodified-since").t1);
 	chat(id, sprint("ifunmodsince, %d", ifunmodsince));
-	if(ifunmodsince && dir.mtime > ifunmodsince)
+	if(req.version() >= HTTP_11 && ifunmodsince && dir.mtime > ifunmodsince)
 		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: object has been modified since %s", req.h.get("if-unmodified-since")));
 
 	if(cachesecs)
@@ -511,7 +511,7 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 	op.length = dir.length;
 	resp.h.add("content-length", string op.length);
 
-	(valid, ranges) := parserange(req.h.find("range").t1, dir);
+	(valid, ranges) := parserange(req.version(), req.h.find("range").t1, dir);
 	if(!valid) {
 		resp.h.add("content-range", sprint("bytes */%bd", dir.length));
 		return responderrmsg(op, Enotsatisfiable, nil);
@@ -615,7 +615,7 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 	length := big 0;
 	if(req.method == POST) {
 		transferenc := req.h.getlist("transfer-encoding");
-		if(transferenc != nil && transferenc != "identity")
+		if(req.version() >= HTTP_11 && transferenc != nil && transferenc != "identity")
 			return responderrmsg(op, Enotimplemented, "Not Implemented: Transfer-Encodings other than identity (i.e. no transfer encoding) are not supported (note: Only single values in the simplest syntax are accepted)");
 
 		if(!req.h.has("content-length", nil)) {
@@ -1062,9 +1062,9 @@ parsehttpdate(s: string): int
 	return daytime->tm2epoch(ref Daytime->Tm(sec, min, hour, mday, mon, year-1900, 0, 0, s[1:], 0));
 }
 
-parserange(range: string, dir: Sys->Dir): (int, list of (big, big))
+parserange(version: int, range: string, dir: Sys->Dir): (int, list of (big, big))
 {
-	if(range == nil)
+	if(range == nil || !(version >= HTTP_11))
 		return (1, nil);
 
 	if(!str->prefix("bytes", range))

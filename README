@@ -11,12 +11,11 @@ features:
 - redirections
 
 todo:
-- ignore some http/1.1 headers for http/1.0 requests?  e.g. range, many more
+- scgi response should be done non-chunked if it sets its content-length, to allow client (and server?) to detect if it closes prematurely.
+- date-header allows three formats, support them all...
 - scgid timeouts
 - better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
 - normal cgi?
-- scgi response should be done non-chunked if it sets its content-length, to allow client (and server?) to detect if it closes prematurely.
-- date-header allows three formats, support them all...
 
 - support transfer-encoding chunked and compressed content-encodings from client?
 - check for security issues with http
