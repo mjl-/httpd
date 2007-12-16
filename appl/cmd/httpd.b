@@ -589,9 +589,12 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 		return responderrmsg(op, Elengthrequired, nil);
 	}
 
-	if(req.method == POST && req.version() >= HTTP_11 && (expect := req.h.find("expect").t1) != nil) {
+	if(req.method == POST && req.version() >= HTTP_11 && (expect := req.h.getlist("expect")) != nil) {
+		# we are not compliant here, values such as "100-continue, " are valid and must be treated as "100-continue"
+		# however, that is too much of a pain to parse (well, it gets much more complex, for no good reason).
+		# tough luck sir bloat!
 		if(str->tolower(expect) != "100-continue")
-			return responderrmsg(op, Eexpectationfailed, sprint("Unrecognized Expectectation: %q", expect));
+			return responderrmsg(op, Eexpectationfailed, sprint("Unrecognized Expectectation: %q (note: Only single values in the simplest syntax are accepted)", expect));
 		fprint(op.fd, "HTTP/1.1 100 continue\r\n\r\n");
 	}
 
