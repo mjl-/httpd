@@ -98,6 +98,7 @@ Enotfound:		con 404;
 Emethodnotallowed:	con 405;
 Elengthrequired:	con 411;
 Epreconditionfailed:	con 412;
+Ebadmediatype:		con 415;
 Enotsatisfiable:	con 416;
 Eexpectationfailed:	con 417;
 Eservererror:		con 500;
@@ -117,6 +118,7 @@ statusmsgs := array[] of {
 	(405,		"Method Not Allowed"),
 	(411,		"Length Required"),
 	(412,		"Precondition Failed"),
+	(415,		"Unsupported Media Type"),
 	(416,		"Requested Range Not Satisfiable"),
 	(417,		"Expectation Failed"),
 	(500,		"Internal Server Error"),
@@ -604,19 +606,30 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 	req := op.req;
 	resp := op.resp;
 
+	# we are taking a short cut here to avoid feeding the bloat monster.  parsing transfer-coding is too involved for us.
 	length := big 0;
-	if(req.method == POST && !req.h.has("content-length", nil)) {
-		length = big req.h.find("content-length").t1;
-		return responderrmsg(op, Elengthrequired, nil);
-	}
+	if(req.method == POST) {
+		transferenc := req.h.getlist("transfer-encoding");
+		if(transferenc != nil && transferenc != "identity")
+			return responderrmsg(op, Enotimplemented, "Not Implemented: Transfer-Encodings other than identity (i.e. no transfer encoding) are not supported (note: Only single values in the simplest syntax are accepted)");
 
-	if(req.method == POST && req.version() >= HTTP_11 && (expect := req.h.getlist("expect")) != nil) {
-		# we are not compliant here, values such as "100-continue, " are valid and must be treated as "100-continue"
-		# however, that is too much of a pain to parse (well, it gets much more complex, for no good reason).
-		# tough luck sir bloat!
-		if(str->tolower(expect) != "100-continue")
-			return responderrmsg(op, Eexpectationfailed, sprint("Unrecognized Expectectation: %q (note: Only single values in the simplest syntax are accepted)", expect));
-		fprint(op.fd, "HTTP/1.1 100 continue\r\n\r\n");
+		if(!req.h.has("content-length", nil)) {
+			length = big req.h.find("content-length").t1;
+			return responderrmsg(op, Elengthrequired, nil);
+		}
+
+		contentenc := req.h.getlist("content-encoding");
+		if(contentenc != nil && contentenc != "identity")
+			return responderrmsg(op, Enotimplemented, "Not Implemented: Content-Encoding other than identity (i.e. no content encoding) are not supported (note: Only single values in the simplest syntax are accepted)");
+
+		if(req.version() >= HTTP_11 && (expect := req.h.getlist("expect")) != nil) {
+			# we are not compliant here, values such as "100-continue, " are valid and must be treated as "100-continue"
+			# however, that is too much of a pain to parse (well, it gets much more complex, for no good reason).
+			# tough luck sir bloat!
+			if(str->tolower(expect) != "100-continue")
+				return responderrmsg(op, Eexpectationfailed, sprint("Unrecognized Expectectation: %q (note: Only single values in the simplest syntax are accepted)", expect));
+			fprint(op.fd, "HTTP/1.1 100 continue\r\n\r\n");
+		}
 	}
 
 	chat(id, sprint("handling scgi request, scgipath %q scgiaddr %q", scgipath, scgiaddr));

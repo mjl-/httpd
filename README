@@ -11,27 +11,20 @@ features:
 - redirections
 
 todo:
-- handle transfer-encoding from client: send error if not identity
 - ignore some http/1.1 headers for http/1.0 requests?  e.g. range, many more
 - scgid timeouts
 - better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
 - normal cgi?
 - scgi response should be done non-chunked if it sets its content-length, to allow client (and server?) to detect if it closes prematurely.
-- implement Transfer-Encoding: chunked sent by clients?  or at least send an error
-- send error on incoming unsupported Content-Encoding.
 - make error messages more useful, most current http daemons just say "bad request" without any other info.
 - http/1.0 specifics
 	* date-header allows three formats
-	* charset names, "UNICODE-1-1-UTF-8" for utf-8?
-	* some http/1.0 might not understand content-type parameters such as "charset=..."?
 	* missing length for clients sending a body must result in 400, not 411? (rfcrfc1945#7.2.2)
 	* if-modified-since should be ignored for head request (rfc1945#8.1)
 
-- headers may only occur more than once if it is specified as a list, i.e. when joining them with a comma does not change semantics.  what about http/1.1?
-
-- security issues with http?
+- support transfer-encoding chunked and compressed content-encodings from client?
+- check for security issues with http
 - check spec which error responses must be with/without body
-- read spec and determine where we need to add quoting or allow for whitespace between tokens
 - ndb file for config?  can be used to select host, port, path.  perhaps even header
 - make faster, prespawn procs?  do less pctl stuff to not need a spawn?!
 - transparent compression?
