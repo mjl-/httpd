@@ -292,7 +292,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 	if(b == nil)
 		die(id, sprint("bufio open: %r"));
 
-	op := Op(id, 0, 0, 0, big 0, fd, rhost, rport, lhost, lport, nil, nil);
+	op := ref Op(id, 0, 0, 0, big 0, fd, rhost, rport, lhost, lport, nil, nil);
 
 	for(nsrvs := 0; ; nsrvs++) {
 		if(nsrvs > 0 && !op.keepalive)
@@ -305,7 +305,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 	}
 }
 
-httptransact(pid: int, b: ref Iobuf, op: Op)
+httptransact(pid: int, b: ref Iobuf, op: ref Op)
 {
 	id := op.now;
 	op.now = readtime();
@@ -333,7 +333,10 @@ httptransact(pid: int, b: ref Iobuf, op: Op)
 	killch <-= killpid;
 	chat(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), sprint("HTTP/%d.%d", req.major, req.minor)));
 	op.req = req;
-	op.keepalive = req.version() >= HTTP_11 && !req.h.has("connection", "close");
+
+	# all values besides "close" are supposedly header names, not important
+	(contoks, conerr) := tokenize(req.h.getlist("connection"));
+	op.keepalive = req.version() >= HTTP_11 && conerr == nil && !listhas(contoks, "close");
 	op.resp = resp := Resp.mk(req.version(), "200", "OK", hdrs);
 
 	# we are not a proxy, this indicates a client credentials...
@@ -468,7 +471,7 @@ httptransact(pid: int, b: ref Iobuf, op: Op)
 		plainfile(path, op, dfd, dir, tag);
 }
 
-plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string)
+plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string)
 {
 	id := op.id;
 	req := op.req;
@@ -534,7 +537,7 @@ plainfile(path: string, op: Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string)
 	hwriteeof(op);
 }
 
-listdir(path: string, op: Op, dfd: ref Sys->FD)
+listdir(path: string, op: ref Op, dfd: ref Sys->FD)
 {
 	id := op.id;
 	resp := op.resp;
@@ -574,7 +577,7 @@ listdir(path: string, op: Op, dfd: ref Sys->FD)
 	hwriteeof(op);
 }
 
-scgi(path: string, op: Op, scgipath, scgiaddr: string)
+scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 {
 	id := op.id;
 	req := op.req;
@@ -684,7 +687,7 @@ hresp(resp: ref Resp, fd: ref Sys->FD, keepalive, chunked: int): string
 	return resp.write(fd);
 }
 
-hwrite(op: Op, d: array of byte)
+hwrite(op: ref Op, d: array of byte)
 {
 	if(len d == 0)
 		return;
@@ -701,13 +704,13 @@ hwrite(op: Op, d: array of byte)
 		fail(sprint("writing response: %r"));
 }
 
-hwriteeof(op: Op)
+hwriteeof(op: ref Op)
 {
 	if(op.chunked)
 		fprint(op.fd, "0\r\n\r\n");
 }
 
-respond(op: Op, st: int, errmsgstr: string, ct: string)
+respond(op: ref Op, st: int, errmsgstr: string, ct: string)
 {
 	resp := op.resp;
 	resp.st = string st;
@@ -732,12 +735,12 @@ respond(op: Op, st: int, errmsgstr: string, ct: string)
 	accesslog(op);
 }
 
-responderr(op: Op, st: int)
+responderr(op: ref Op, st: int)
 {
 	return respond(op, st, nil, nil);
 }
 
-responderrmsg(op: Op, st: int, errmsg: string)
+responderrmsg(op: ref Op, st: int, errmsg: string)
 {
 	if(errmsg == nil)
 		errmsg = statusmsg(st);
@@ -754,7 +757,7 @@ mkhtml(msg: string): string
 	return mkhtmlstart(msg)+sprint("<h1>%s</h1></body></html>\n", htmlescape(msg));
 }
 
-etag(path: string, op: Op, dir: Sys->Dir): string
+etag(path: string, op: ref Op, dir: Sys->Dir): string
 {
 	host := op.req.h.find("host").t1;
 	if(host == nil)
@@ -767,7 +770,7 @@ maxage(nil: string): string
 	return sprint("maxage=%d", cachesecs);
 }
 
-accesslog(op: Op)
+accesslog(op: ref Op)
 {
 	length := "";
 	if(!op.chunked)
@@ -841,7 +844,7 @@ pathurls(s: string): string
 	return r;
 }
 
-scgirequest(path, scgipath: string, req: ref Req, op: Op, length: big): array of byte
+scgirequest(path, scgipath: string, req: ref Req, op: ref Op, length: big): array of byte
 {
 	servername := req.h.find("host").t1;
 	if(servername == nil)
@@ -913,12 +916,34 @@ httpdate(t: int): string
 	return sprint("%s, %02d %s %d %02d:%02d:%02d GMT", days[tm.wday], tm.mday, months[tm.mon], tm.year+1900, tm.hour, tm.min, tm.sec);
 }
 
-readtoken(s: string): (string, string)
+readtoken(s: string): (string, string, string)
 {
 	for(i := 0; i < len s; i++)
-		if(s[i] < ' ' || str->in(s[i], "()<>@,;:\\\"/[]?={} \t"))
+		if(s[i] < ' ')
+			return (nil, nil, "invalid control characters found");
+		else if(str->in(s[i], "()<>@,;:\\\"/[]?={} \t"))
 			break;
-	return (s[:i], s[i:]);
+	return (s[:i], s[i:], nil);
+}
+
+tokenize(s: string): (list of string, string)
+{
+	token, err: string;
+	l: list of string;
+	for(;;) {
+		(token, s, err) = readtoken(s);
+		if(err != nil)
+			return (nil, err);
+		if(token != nil)
+			l = token::l;
+		s = str->drop(s, " \t");
+		if(s == nil)
+			break;
+		if(s[0] != ',')
+			return (nil, "expected comma as separator");
+		s = str->drop(s[1:], " \t");
+	}
+	return (rev(l), nil);
 }
 
 # for http/1.1 a backslash may be used for escaping, not for http/1.0
@@ -1134,6 +1159,14 @@ sha1(a: array of byte): string
 	r := array[keyring->SHA1dlen] of byte;
 	keyring->sha1(a, len a, r, nil);
 	return byte2str(r);
+}
+
+listhas(l: list of string, s: string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
 }
 
 has(s: string, c: int): int
