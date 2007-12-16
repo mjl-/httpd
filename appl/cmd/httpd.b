@@ -333,10 +333,10 @@ httptransact(pid: int, b: ref Iobuf, op: Op)
 	killch <-= killpid;
 	chat(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), sprint("HTTP/%d.%d", req.major, req.minor)));
 	op.req = req;
-	op.keepalive = req.version() == HTTP_11 && !req.h.has("connection", "close");
+	op.keepalive = req.version() >= HTTP_11 && !req.h.has("connection", "close");
 	op.resp = resp := Resp.mk(req.version(), "200", "OK", hdrs);
 
-	if(req.version() == HTTP_11 && !req.h.has("host", nil))
+	if(req.version() >= HTTP_11 && !req.h.has("host", nil))
 		return responderrmsg(op, Ebadrequest, "Bad Request: Missing header \"Host\".");
 
 	case req.method {
@@ -582,7 +582,7 @@ scgi(path: string, op: Op, scgipath, scgiaddr: string)
 		return responderrmsg(op, Elengthrequired, nil);
 	}
 
-	if(req.method == POST && (expect := req.h.find("expect").t1) != nil && req.version() == HTTP_11) {
+	if(req.method == POST && (expect := req.h.find("expect").t1) != nil && req.version() >= HTTP_11) {
 		if(str->tolower(expect) != "100-continue")
 			return responderrmsg(op, Eexpectationfailed, sprint("Unrecognized Expectectation: %q", expect));
 		fprint(op.fd, "HTTP/1.1 100 continue\r\n\r\n");
@@ -928,7 +928,7 @@ readqs(s: string, v: int): (string, string, string)
 	for(i := 1; i < len s; i++)
 		if(s[i] < ' ')
 			return (nil, nil, "invalid control character found inside quoted string");
-		else if(v == HTTP_11 && s[i] == '\\' && i+1 < len s && s[i+1] == '"')
+		else if(v >= HTTP_11 && s[i] == '\\' && i+1 < len s && s[i+1] == '"')
 			r[len r] = s[++i];
 		else {
 			r[len r] = s[i];
