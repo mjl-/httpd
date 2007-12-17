@@ -11,7 +11,7 @@ features:
 - redirections
 
 todo:
-- scgi response should be done non-chunked if it sets its content-length, to allow client (and server?) to detect if it closes prematurely.
+- scgi response should be done non-chunked if it sets its content-length, to allow client (and server?) to detect if it closes prematurely.  but mostly, it is nice to keep the content-length information around if it was given.  allows for progress bars for downloading.
 - scgid timeouts
 - better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
 - normal cgi?

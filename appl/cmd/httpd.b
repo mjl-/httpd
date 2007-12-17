@@ -319,6 +319,8 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		if(sys->chdir("/") != 0)
 			break;
 
+		op.chunked = op.keepalive = 0;
+		op.length = big 0;
 		httptransact(pid, b, op);
 	}
 }
@@ -529,7 +531,7 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 		} else {
 			bound = sha1(array of byte (string <-randch+","+string op.now));
 			resp.h.set("content-type", "multipart/byteranges; boundary="+bound);
-			op.chunked = op.keepalive;
+			op.chunked = resp.version() >= HTTP_11;
 		}
 		resp.st = "206";
 		resp.stmsg = "partial content";
@@ -574,7 +576,7 @@ listdir(path: string, op: ref Op, dfd: ref Sys->FD)
 
 	chat(id, "doing directory listing");
 	resp.h.add("content-type", "text/html; charset=utf-8");
-	op.chunked = op.keepalive;
+	op.chunked = resp.version() >= HTTP_11;
 
 	accesslog(op);
 
@@ -691,7 +693,7 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 	for(hl := hdrs.all(); hl != nil; hl = tl hl)
 		resp.h.add((hd hl).t0, (hd hl).t1);
 
-	op.chunked = op.keepalive;	# xxx check whether content-length has been set?
+	op.chunked = resp.version() >= HTTP_11;	# xxx check whether content-length has been set?
 	rerr = hresp(resp, op.fd, op.keepalive, op.chunked);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
