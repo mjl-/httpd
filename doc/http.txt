@@ -259,6 +259,7 @@ mention new status response codes and when they are used.
 new methods?  aren't defined right?
 
 http/1.0 headers:
+
 - Allow
 - Authorization
 - Content-Encoding
@@ -277,6 +278,7 @@ http/1.0 headers:
 - WWW-Authenticate
 
 new in http/1.1:
+
 - Accept
 - Accept-Charset
 - Accept-Encoding
@@ -310,6 +312,7 @@ new in http/1.1:
 - Warning
 
 sending headers such as `ETag` to a http/1.0 client is not a problem, clients should not do anything with them.  some incoming headers should really be handled for http/1.1 only:
+
 - Expect
 - If-Match
 - If-None-Match
