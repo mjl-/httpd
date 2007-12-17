@@ -477,7 +477,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 
 	ifmodsince := parsehttpdate(req.h.get("if-modified-since"));
 	chat(id, sprint("ifmodsince, %d, mtime %d", ifmodsince, dir.mtime));
-	# http/1.0, head and if-modified-since: rfc1945#8.1
+	# http/1.0, head and if-modified-since: rfc1945#8.1;  unsupported date value can safely be ignored.
 	if(!(req.version() == HTTP_10 && req.method == HEAD) && ifmodsince && dir.mtime <= ifmodsince)
 		return responderr(op, Enotmodified);
 
@@ -485,9 +485,10 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(req.version() >= HTTP_11 && ifnonematch != nil && req.method == GET && etagmatch(req.version(), tag, ifnonematch, 0))
 		return responderr(op, Enotmodified);
 
-	ifunmodsince := parsehttpdate(req.h.get("if-unmodified-since"));
+	# unsupported date value causes a "precondition failed"
+	ifunmodsince := parsehttpdate(ifunmodsincestr := req.h.get("if-unmodified-since"));
 	chat(id, sprint("ifunmodsince, %d", ifunmodsince));
-	if(req.version() >= HTTP_11 && ifunmodsince && dir.mtime > ifunmodsince)
+	if(req.version() >= HTTP_11 && (ifunmodsince && dir.mtime > ifunmodsince || ifunmodsincestr != nil && !ifunmodsince))
 		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: object has been modified since %s", req.h.get("if-unmodified-since")));
 
 	if(cachesecs)
@@ -518,6 +519,7 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 	}
 	bound := "";
 	ifrange := req.h.get("if-range");
+	# unsupported date value can safely be ignored.
 	if(ranges != nil && (ifrange == nil
 	                     || ifrange[0] == '"' && tag == ifrange
 	                     || dir.mtime <= parsehttpdate(ifrange))) {
@@ -1037,7 +1039,7 @@ tokenizeqs(s: string, v: int): (list of string, string)
 	return (rev(r), nil);
 }
 
-# i'm not going to parse three different date formats where a simple number would have sufficed.
+# i'm not going to parse three different date formats where a simple unix epoch integer would have sufficed.
 # death to the bloat monster!
 parsehttpdate(s: string): int
 {
