@@ -670,18 +670,18 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 	}
 
 	l := sb.gets('\n');
-	if(!prefix("status: ", str->tolower(l))) {
+	if(!prefix("status:", str->tolower(l))) {
 		chat(id, "bad scgi response line: "+l);
 		return responderrmsg(op, Eservererror, nil);
 	}
-	l = l[len "status: ":];
-	(st, stmsg) := str->splitstrl(l, " ");
-	if(stmsg != nil)
-		stmsg = stmsg[1:];
-	while(stmsg != nil && str->in(stmsg[len stmsg-1], "\r\n"))
-		stmsg = stmsg[:len stmsg-1];
-	resp.st = st;
-	resp.stmsg = stmsg;
+	l = str->drop(l[len "status:":], " \t");
+	(resp.st, resp.stmsg) = str->splitstrl(l, " ");
+	if(resp.stmsg != nil)
+		resp.stmsg = droptl(resp.stmsg[1:], " \t\r\n");
+	if(len resp.st != 3 || str->drop(resp.st, "0-9") != "") {
+		chat(id, "bad scgi response line: "+l);
+		return responderrmsg(op, Eservererror, nil);
+	}
 
 	accesslog(op);
 
@@ -690,10 +690,19 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 		chat(id, "reading scgi headers: "+rerr);
 		return responderrmsg(op, Eservererror, nil);
 	}
+	elength := big -1;
+	if(hdrs.has("content-length", nil)) {
+		elengthstr := hdrs.get("content-length");
+		if(elengthstr == nil || str->drop(elengthstr, "0-9") != "") {
+			chat(id, "bad scgi content-length header: "+elengthstr);
+			return responderrmsg(op, Eservererror, nil);
+		}
+		elength = big elengthstr;
+	}
 	for(hl := hdrs.all(); hl != nil; hl = tl hl)
 		resp.h.add((hd hl).t0, (hd hl).t1);
 
-	op.chunked = resp.version() >= HTTP_11;	# xxx check whether content-length has been set?
+	op.chunked = elength == big -1 && resp.version() >= HTTP_11;
 	rerr = hresp(resp, op.fd, op.keepalive, op.chunked);
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
@@ -705,8 +714,16 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 		n := sys->read(sfd, d := array[Sys->ATOMICIO] of byte, len d);
 		if(n < 0)
 			die(id, sprint("reading file: %r"));
-		if(n == 0)
+		if(n == 0) {
+			if(elength > big 0)
+				die(id, "bad scgi body, message shorter than content-length specified");
 			break;
+		}
+		if(elength > big 0) {
+			if(big n > elength)
+				die(id, "bad scgi body, message longer than content-length specified");
+			elength -= big n;
+		}
 		hwrite(op, d[:n]);
 	}
 	hwriteeof(op);
