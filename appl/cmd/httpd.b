@@ -622,8 +622,12 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 		if(req.version() >= HTTP_11 && transferenc != nil && transferenc != "identity")
 			return responderrmsg(op, Enotimplemented, "Not Implemented: Transfer-Encodings other than identity (i.e. no transfer encoding) are not supported (note: Only single values in the simplest syntax are accepted)");
 
-		if(!req.h.has("content-length", nil)) {
-			length = big req.h.get("content-length");
+		if(req.h.has("content-length", nil)) {
+			lengthstr := req.h.get("content-length");
+			if(lengthstr == nil || str->drop(lengthstr, "0-9") != "")
+				return responderrmsg(op, Ebadrequest, "Bad Request: Invalid Content-Length: "+lengthstr);
+			length = big lengthstr;
+		} else {
 			e := Elengthrequired;
 			emsg: string;
 			if(req.version() == HTTP_10) {
@@ -654,7 +658,7 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 	if(serr != nil)
 		return responderrmsg(op, Eservererror, nil);
 
-	sreq := scgirequest(path, scgipath, req, op, big length);
+	sreq := scgirequest(path, scgipath, req, op, length);
 	if(sys->write(sfd, sreq, len sreq) != len sreq) {
 		chat(id, sprint("write scgi request: %r"));
 		return responderrmsg(op, Eservererror, nil);
@@ -711,7 +715,7 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 		return;
 
 	for(;;) {
-		n := sys->read(sfd, d := array[Sys->ATOMICIO] of byte, len d);
+		n := sb.read(d := array[Sys->ATOMICIO] of byte, len d);
 		if(n < 0)
 			die(id, sprint("reading file: %r"));
 		if(n == 0) {

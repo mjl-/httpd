@@ -12,8 +12,9 @@ features:
 
 todo:
 - scgid timeouts, better scgid sanity checking
-- better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
 - normal cgi?
+- disallow authentication for paths that don't accept it
+- better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
 
 - support transfer-encoding chunked and compressed content-encodings from client?
 - check for security issues with http
