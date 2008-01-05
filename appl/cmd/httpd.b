@@ -550,6 +550,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 			dfd = ifd;
 			dok = iok;
 			dir = idir;
+			path += hd l;
 			break;
 		}
 	}
