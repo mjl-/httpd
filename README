@@ -11,7 +11,7 @@ features:
 - redirections
 
 todo:
-- scgid timeouts, better scgid sanity checking
+- better scgid sanity checking
 - normal cgi?
 - better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
 

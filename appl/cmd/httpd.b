@@ -42,6 +42,8 @@ Op: adt {
 	resp:	ref Resp;
 };
 
+scgitimeoutsecs: con 3*60;
+
 dflag, hflag, lflag: int;
 cachesecs := 0;
 addr := "net!localhost!8000";
@@ -147,13 +149,14 @@ idch: chan of int;
 randch: chan of int;
 killch: chan of int;
 killschedch: chan of (int, int, chan of int);
+excch: chan of (int, chan of string);
 
 timefd: ref Sys->FD;
 errorfd: ref Sys->FD;
 accessfd: ref Sys->FD;
 
 scgipaths: list of (string, string);
-scgichan: chan of (string, chan of (ref Sys->FD, string));
+scgidialch: chan of (string, chan of (ref Sys->FD, string));
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -224,8 +227,10 @@ init(nil: ref Draw->Context, args: list of string)
 	killch = chan of int;
 	killschedch = chan of (int, int, chan of int);
 	spawn killer();
+	excch = chan of (int, chan of string);
+	spawn exceptsetter();
 
-	scgichan = chan of (string, chan of (ref Sys->FD, string));
+	scgidialch = chan of (string, chan of (ref Sys->FD, string));
 	spawn scgidialer();
 
 	(aok, aconn) := sys->announce(addr);
@@ -276,10 +281,22 @@ timeoutkill(pid, timeout: int, respch: chan of int)
 	kill(pid);
 }
 
+exceptsetter()
+{
+	for(;;) {
+		(pid, respch) := <-excch;
+		err: string;
+		fd := sys->open(sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+		if(fd == nil || fprint(fd, "exceptions notifyleader") == -1)
+			err = sprint("setting exception handling for pid %d: %r", pid);
+		respch <-= err;
+	}
+}
+
 scgidialer()
 {
 	for(;;) {
-		(scgiaddr, replychan) := <-scgichan;
+		(scgiaddr, replychan) := <-scgidialch;
 		spawn scgidial(scgiaddr, replychan);
 	}
 }
@@ -304,8 +321,6 @@ httpserve(fd: ref Sys->FD, conndir: string)
 	chat(id, sprint("connect from %s:%s to %s:%s", rhost, rport, lhost, lport));
 
 	sys->pctl(Sys->NEWPGRP, nil);
-	if(exc->setexcmode(Exception->NOTIFYLEADER) != 0)
-		die(id, sprint("setting exception handling: %r"));
 	pid := sys->pctl(Sys->NEWNS|Sys->NODEVS, nil);
 
 	b := bufio->fopen(fd, Bufio->OREAD);
@@ -446,9 +461,18 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		}
 	}
 
-	if(((scgipath, scgiaddr) := findscgi(path)).t1 != nil)
-		return scgi(path, op, scgipath, scgiaddr);
+	# if path is scgi-handled, let scgi() handle the request
+	if(((scgipath, scgiaddr) := findscgi(path)).t1 != nil) {
+		timeo := scgitimeoutsecs*1000;
+		donech := chan of int;
+		spawn timeout(op, timeo, timeoch := chan of int, donech);
+		timeopid := <- timeoch;
+		spawn scgi(path, op, scgipath, scgiaddr, timeopid, timeoch, donech);
+		<-donech;
+		return;
+	}
 
+	# path is one of:  plain file, directory (either listing or plain index file)
 	dfd := sys->open("."+path, Sys->OREAD);
 	if(dfd != nil)
 		(dok, dir) := sys->fstat(dfd);
@@ -615,13 +639,45 @@ listdir(path: string, op: ref Op, dfd: ref Sys->FD)
 	hwriteeof(op);
 }
 
-scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
+timeout(op: ref Op, timeo: int, timeoch, donech: chan of int)
 {
+	timeoch <-= sys->pctl(0, nil);
+	opid := <-timeoch;
+	sys->sleep(timeo);
+	chat(op.id, sprint("timeout %d ms for request, killing handler pid %d, timeopid %d", timeo, opid, sys->pctl(0, nil)));
+	killch <-= opid;
+	responderrmsg(op, Eservererror, "Response could not be generated in time.");
+	donech <-= 0;
+}
+
+scgi(path: string, op: ref Op, scgipath, scgiaddr: string, timeopid: int, scgich, donech: chan of int)
+{
+	npid := sys->pctl(Sys->NEWPGRP, nil);
+	if(npid < 0) {
+		killch <-= timeopid;
+		chat(op.id, sprint("pctl newpgr: %r"));
+		responderrmsg(op, Eservererror, nil);
+	}
+	excch <-= (npid, respch := chan of string);
+	err := <-respch;
+	if(err != nil) {
+		killch <-= timeopid;
+		chat(op.id, sprint("setting exception notify leader: %s", err));
+		responderrmsg(op, Eservererror, nil);
+	} else
+		_scgi(path, op, scgipath, scgiaddr, timeopid, scgich);
+	donech <-= 0;
+}
+
+_scgi(path: string, op: ref Op, scgipath, scgiaddr: string, timeopid: int, scgich: chan of int)
+{
+	scgich <-= sys->pctl(0, nil);
+
 	id := op.id;
 	req := op.req;
 	resp := op.resp;
 
-	# we are taking a short cut here to avoid feeding the bloat monster.  parsing transfer-coding is too involved for us.
+	# we are taking a short cut here to avoid feeding the bloat monster:  parsing transfer-coding is too involved for us.
 	length := big 0;
 	if(req.method == POST) {
 		transferenc := req.h.getlist("transfer-encoding");
@@ -658,8 +714,9 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 		}
 	}
 
-	chat(id, sprint("handling scgi request, scgipath %q scgiaddr %q", scgipath, scgiaddr));
-	scgichan <-= (scgiaddr, replychan := chan of (ref Sys->FD, string));
+	chat(id, sprint("handling scgi request, scgipath %q scgiaddr %q, pid %d timeopid %d", scgipath, scgiaddr, sys->pctl(0, nil), timeopid));
+
+	scgidialch <-= (scgiaddr, replychan := chan of (ref Sys->FD, string));
 	(sfd, serr) := <-replychan;
 	if(serr != nil)
 		return responderrmsg(op, Eservererror, nil);
@@ -680,6 +737,7 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string)
 	}
 
 	l := sb.gets('\n');
+	killch <-= timeopid;
 	if(!prefix("status:", str->tolower(l))) {
 		chat(id, "bad scgi response line: "+l);
 		return responderrmsg(op, Eservererror, nil);
