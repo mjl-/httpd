@@ -13,6 +13,7 @@ include "exception.m";
 include "keyring.m";
 include "security.m";
 include "encoding.m";
+include "sh.m";
 include "mhttp.m";
 
 sys: Sys;
@@ -23,6 +24,7 @@ keyring: Keyring;
 random: Random;
 str: String;
 base64: Encoding;
+sh: Sh;
 http: Http;
 
 print, sprint, fprint, fildes: import sys;
@@ -42,7 +44,7 @@ Op: adt {
 	resp:	ref Resp;
 };
 
-scgitimeoutsecs: con 3*60;
+cgitimeoutsecs: con 3*60;
 
 dflag, hflag, lflag: int;
 cachesecs := 0;
@@ -155,7 +157,11 @@ timefd: ref Sys->FD;
 errorfd: ref Sys->FD;
 accessfd: ref Sys->FD;
 
-scgipaths: list of (string, string);
+Cgi, Scgi: con iota;
+cgitypes := array[] of {"cgi", "scgi"};
+cgipaths: list of (string, string, int);
+
+cgispawnch: chan of (string, string, string, ref Req, ref Op, big, chan of (ref Sys->FD, ref Sys->FD, string));
 scgidialch: chan of (string, chan of (ref Sys->FD, string));
 
 init(nil: ref Draw->Context, args: list of string)
@@ -170,23 +176,25 @@ init(nil: ref Draw->Context, args: list of string)
 	random = load Random Random->PATH;
 	str = load String String->PATH;
 	base64 = load Encoding Encoding->BASE64PATH;
+	sh = load Sh Sh->PATH;
 	http = load Http Http->PATH;
 	http->init(bufio);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-dhl] [-A path realm user:pass] [-a addr] [-c cachesecs] [-i indexfile] [-r orig new] [-s path addr] [-t extention mimetype] webroot");
+	arg->setusage(arg->progname()+" [-dhl] [-A path realm user:pass] [-C cachesecs] [-a addr] [-c path command] [-i indexfile] [-r orig new] [-s path addr] [-t extention mimetype] webroot");
 	while((c := arg->opt()) != 0)
 		case c {
 		'A' =>	auths = (arg->earg(), arg->earg(), base64->enc(array of byte arg->earg()))::auths;
+		'C' =>	cachesecs = int arg->earg();
 		'a' =>	addr = arg->earg();
-		'c' =>	cachesecs = int arg->earg();
+		'c' =>	cgipaths = (arg->earg(), arg->earg(), Cgi)::cgipaths;
 		'd' =>	dflag++;
 		'h' =>	hflag++;
 		'i' =>	indexfiles = arg->earg()::indexfiles;
 		'l' =>	lflag++;
 			http->debug = 1;
 		'r' =>	redirs = (arg->earg(), arg->earg())::redirs;
-		's' =>	scgipaths = (arg->earg(), arg->earg())::scgipaths;
+		's' =>	cgipaths = (arg->earg(), arg->earg(), Scgi)::cgipaths;
 		't' =>	(extension, mimetype) := (arg->earg(), arg->earg());
 			ntypes := array[len types+1] of (string, string);
 			ntypes[0] = (extension, mimetype);
@@ -229,6 +237,9 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn killer();
 	excch = chan of (int, chan of string);
 	spawn exceptsetter();
+
+	cgispawnch = chan of (string, string, string, ref Req, ref Op, big, chan of (ref Sys->FD, ref Sys->FD, string));
+	spawn cgispawner();
 
 	scgidialch = chan of (string, chan of (ref Sys->FD, string));
 	spawn scgidialer();
@@ -293,6 +304,56 @@ exceptsetter()
 	}
 }
 
+cgispawner()
+{
+	for(;;) {
+		(cmd, path, cgipath, req, op, length, replych) := <-cgispawnch;
+		spawn cgispawn(cmd, path, cgipath, req, op, length, replych);
+	}
+}
+
+cgispawn(cmd, path, cgipath: string, req: ref Req, op: ref Op, length: big, replych: chan of (ref Sys->FD, ref Sys->FD, string))
+{
+	fd0 := array[2] of ref Sys->FD;
+	fd1 := array[2] of ref Sys->FD;
+	fd2 := array[2] of ref Sys->FD;
+	if(sys->pipe(fd0) != 0 || sys->pipe(fd1) != 0 || sys->pipe(fd2) != 0) {
+		replych <-= (nil, nil, sprint("pipe: %r"));
+		return;
+	}
+	spawn errlogger(fd2[0]);
+
+	if(sys->pctl(Sys->NEWFD|Sys->FORKNS|Sys->FORKENV, fd0[1].fd::fd1[1].fd::fd2[1].fd::nil) < 0) {
+		replych <-= (nil, nil, sprint("pctl newfd: %r"));
+		return;
+	}
+	for(l := cgivars(path, cgipath, req, op, length, nil); l != nil; l = tl l)
+		env->setenv((hd l).t0, (hd l).t1);
+
+	if(sys->dup(fd0[1].fd, 0) == -1 || sys->dup(fd1[1].fd, 1) == -1 || sys->dup(fd2[1].fd, 2) == -1) {
+		say(sprint("dup: %r"));
+		replych <-= (nil, nil, sprint("dup: %r"));
+		return;
+	}
+	replych <-= (fd0[0], fd1[0], nil);
+	fd0 = fd1 = fd2 = nil;
+	err := sh->system(nil, cmd);
+	if(err != nil)
+		chat(-1, sprint("cgispawn, cmd %q: %s", cmd, err));
+}
+
+errlogger(fd: ref Sys->FD)
+{
+	for(;;) {
+		n := sys->read(fd, d := array[Sys->ATOMICIO] of byte, len d);
+		if(n < 0)
+			die(-1, sprint("reading stderr: %r"));
+		if(n == 0)
+			break;
+		say(string d[:n]);
+	}
+}
+
 scgidialer()
 {
 	for(;;) {
@@ -321,6 +382,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 	chat(id, sprint("connect from %s:%s to %s:%s", rhost, rport, lhost, lport));
 
 	sys->pctl(Sys->NEWPGRP, nil);
+	exc->setexcmode(Exception->NOTIFYLEADER);
 	pid := sys->pctl(Sys->NEWNS|Sys->NODEVS, nil);
 
 	b := bufio->fopen(fd, Bufio->OREAD);
@@ -461,13 +523,13 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		}
 	}
 
-	# if path is scgi-handled, let scgi() handle the request
-	if(((scgipath, scgiaddr) := findscgi(path)).t1 != nil) {
-		timeo := scgitimeoutsecs*1000;
+	# if path is cgi-handled, let cgi() handle the request
+	if(((cgipath, cgiaction, cgitype) := findcgi(path)).t1 != nil) {
+		timeo := cgitimeoutsecs*1000;
 		donech := chan of int;
 		spawn timeout(op, timeo, timeoch := chan of int, donech);
 		timeopid := <- timeoch;
-		spawn scgi(path, op, scgipath, scgiaddr, timeopid, timeoch, donech);
+		spawn cgi(path, op, cgipath, cgiaction, cgitype, timeopid, timeoch, donech);
 		<-donech;
 		return;
 	}
@@ -641,7 +703,7 @@ listdir(path: string, op: ref Op, dfd: ref Sys->FD)
 
 timeout(op: ref Op, timeo: int, timeoch, donech: chan of int)
 {
-	timeoch <-= sys->pctl(0, nil);
+	timeoch <-= sys->pctl(Sys->NEWPGRP, nil);
 	opid := <-timeoch;
 	sys->sleep(timeo);
 	chat(op.id, sprint("timeout %d ms for request, killing handler pid %d, timeopid %d", timeo, opid, sys->pctl(0, nil)));
@@ -650,7 +712,7 @@ timeout(op: ref Op, timeo: int, timeoch, donech: chan of int)
 	donech <-= 0;
 }
 
-scgi(path: string, op: ref Op, scgipath, scgiaddr: string, timeopid: int, scgich, donech: chan of int)
+cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: int, cgich, donech: chan of int)
 {
 	npid := sys->pctl(Sys->NEWPGRP, nil);
 	if(npid < 0) {
@@ -664,14 +726,19 @@ scgi(path: string, op: ref Op, scgipath, scgiaddr: string, timeopid: int, scgich
 		killch <-= timeopid;
 		chat(op.id, sprint("setting exception notify leader: %s", err));
 		responderrmsg(op, Eservererror, nil);
-	} else
-		_scgi(path, op, scgipath, scgiaddr, timeopid, scgich);
+	} else {
+		# catch exceptions (e.g. when writing to remote fails), to make sure our caller can return
+		{ _cgi(path, op, cgipath, cgiaction, cgitype, timeopid, cgich); }
+		exception {
+		* =>	;
+		}
+	}
 	donech <-= 0;
 }
 
-_scgi(path: string, op: ref Op, scgipath, scgiaddr: string, timeopid: int, scgich: chan of int)
+_cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: int, cgich: chan of int)
 {
-	scgich <-= sys->pctl(0, nil);
+	cgich <-= sys->pctl(0, nil);
 
 	id := op.id;
 	req := op.req;
@@ -710,36 +777,48 @@ _scgi(path: string, op: ref Op, scgipath, scgiaddr: string, timeopid: int, scgic
 			# tough luck sir bloat!
 			if(str->tolower(expect) != "100-continue")
 				return responderrmsg(op, Eexpectationfailed, sprint("Unrecognized Expectectation: %q (note: Only single values in the simplest syntax are accepted)", expect));
-			fprint(op.fd, "HTTP/1.1 100 continue\r\n\r\n");
+			fprint(op.fd, "HTTP/1.1 100 Continue\r\n\r\n");
 		}
 	}
 
-	chat(id, sprint("handling scgi request, scgipath %q scgiaddr %q, pid %d timeopid %d", scgipath, scgiaddr, sys->pctl(0, nil), timeopid));
+	chat(id, sprint("handling cgi request, cgipath %q cgiaction %q cgitype %s, pid %d timeopid %d", cgipath, cgiaction, cgitypes[cgitype], sys->pctl(0, nil), timeopid));
 
-	scgidialch <-= (scgiaddr, replychan := chan of (ref Sys->FD, string));
-	(sfd, serr) := <-replychan;
-	if(serr != nil)
-		return responderrmsg(op, Eservererror, nil);
+	fd0, fd1: ref Sys->FD;
+	if(cgitype == Scgi) {
+		scgidialch <-= (cgiaction, replychan := chan of (ref Sys->FD, string));
+		(sfd, serr) := <-replychan;
+		if(serr != nil)
+			return responderrmsg(op, Eservererror, nil);
 
-	sreq := scgirequest(path, scgipath, req, op, length);
-	if(sys->write(sfd, sreq, len sreq) != len sreq) {
-		chat(id, sprint("write scgi request: %r"));
-		return responderrmsg(op, Eservererror, nil);
+		sreq := scgirequest(path, cgipath, req, op, length);
+		if(sys->write(sfd, sreq, len sreq) != len sreq) {
+			chat(id, sprint("write scgi request: %r"));
+			return responderrmsg(op, Eservererror, nil);
+		}
+		fd0 = fd1 = sfd;
+	} else {
+		err: string;
+		cgispawnch <-= (cgiaction, path, cgipath, req, op, length, replych := chan of (ref Sys->FD, ref Sys->FD, string));
+		(fd0, fd1, err) = <-replych;
+		if(err != nil) {
+			chat(id, "cgispawn: "+err);
+			return responderrmsg(op, Eservererror, nil);
+		}
 	}
 
 	if(length > big 0)
-		spawn scgifunnel(op.fd, sfd, length);
+		spawn cgifunnel(op.fd, fd0, length);
 
-	sb := bufio->fopen(sfd, Bufio->OREAD);
+	sb := bufio->fopen(fd1, Bufio->OREAD);
 	if(sb == nil) {
-		chat(id, sprint("bufio fopen scgi fd: %r"));
+		chat(id, sprint("bufio fopen cgi fd: %r"));
 		return responderrmsg(op, Eservererror, nil);
 	}
 
 	l := sb.gets('\n');
 	killch <-= timeopid;
 	if(!prefix("status:", str->tolower(l))) {
-		chat(id, "bad scgi response line: "+l);
+		chat(id, "bad cgi response line: "+l);
 		return responderrmsg(op, Eservererror, nil);
 	}
 	l = str->drop(l[len "status:":], " \t");
@@ -747,7 +826,7 @@ _scgi(path: string, op: ref Op, scgipath, scgiaddr: string, timeopid: int, scgic
 	if(resp.stmsg != nil)
 		resp.stmsg = droptl(resp.stmsg[1:], " \t\r\n");
 	if(len resp.st != 3 || str->drop(resp.st, "0-9") != "") {
-		chat(id, "bad scgi response line: "+l);
+		chat(id, "bad cgi response line: "+l);
 		return responderrmsg(op, Eservererror, nil);
 	}
 
@@ -755,14 +834,14 @@ _scgi(path: string, op: ref Op, scgipath, scgiaddr: string, timeopid: int, scgic
 
 	(hdrs, rerr) := Hdrs.read(sb);
 	if(rerr != nil) {
-		chat(id, "reading scgi headers: "+rerr);
+		chat(id, "reading cgi headers: "+rerr);
 		return responderrmsg(op, Eservererror, nil);
 	}
 	elength := big -1;
 	if(hdrs.has("content-length", nil)) {
 		elengthstr := hdrs.get("content-length");
 		if(elengthstr == nil || str->drop(elengthstr, "0-9") != "") {
-			chat(id, "bad scgi content-length header: "+elengthstr);
+			chat(id, "bad cgi content-length header: "+elengthstr);
 			return responderrmsg(op, Eservererror, nil);
 		}
 		elength = big elengthstr;
@@ -772,8 +851,10 @@ _scgi(path: string, op: ref Op, scgipath, scgiaddr: string, timeopid: int, scgic
 
 	op.chunked = elength == big -1 && resp.version() >= HTTP_11;
 	rerr = hresp(resp, op.fd, op.keepalive, op.chunked);
-	if(rerr != nil)
-		die(id, "writing response: "+rerr);
+	if(rerr != nil) {
+		chat(id, "writing response: "+rerr);
+		return;
+	}
 
 	if(req.method == HEAD)
 		return;
@@ -784,12 +865,12 @@ _scgi(path: string, op: ref Op, scgipath, scgiaddr: string, timeopid: int, scgic
 			die(id, sprint("reading file: %r"));
 		if(n == 0) {
 			if(elength > big 0)
-				die(id, "bad scgi body, message shorter than content-length specified");
+				die(id, "bad cgi body, message shorter than content-length specified");
 			break;
 		}
 		if(elength > big 0) {
 			if(big n > elength)
-				die(id, "bad scgi body, message longer than content-length specified");
+				die(id, "bad cgi body, message longer than content-length specified");
 			elength -= big n;
 		}
 		hwrite(op, d[:n]);
@@ -798,16 +879,16 @@ _scgi(path: string, op: ref Op, scgipath, scgiaddr: string, timeopid: int, scgic
 	chat(id, "request done");
 }
 
-scgifunnel(fd, sfd: ref Sys->FD, length: big)
+cgifunnel(fd, sfd: ref Sys->FD, length: big)
 {
 	while(length > big 0) {
 		n := sys->read(fd, d := array[Sys->ATOMICIO] of byte, len d);
 		if(n < 0)
-			fail(sprint("fail:scgi read: %r"));
+			fail(sprint("fail:cgi read: %r"));
 		if(n == 0)
-			fail(sprint("fail:scgi read: premature eof"));
+			fail(sprint("fail:cgi read: premature eof"));
 		if(sys->write(sfd, d, n) != n)
-			fail(sprint("fail:scgi write: %r"));
+			fail(sprint("fail:cgi write: %r"));
 		length -= big n;
 	}
 }
@@ -839,7 +920,7 @@ hwrite(op: ref Op, d: array of byte)
 		d = nd;
 	}
 	if(sys->write(op.fd, d, len d) != len d)
-		fail(sprint("writing response: %r"));
+		fail(sprint("writing response data: %r"));
 }
 
 hwriteeof(op: ref Op)
@@ -918,12 +999,12 @@ accesslog(op: ref Op)
 		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.url.pack(), sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg, length, op.req.h.get("user-agent"));
 }
 
-findscgi(path: string): (string, string)
+findcgi(path: string): (string, string, int)
 {
-	for(l := scgipaths; l != nil; l = tl l)
+	for(l := cgipaths; l != nil; l = tl l)
 		if(str->prefix((hd l).t0, path))
 			return hd l;
-	return (nil, nil);
+	return (nil, nil, 0);
 }
 
 htmlescape(s: string): string
@@ -983,13 +1064,13 @@ pathurls(s: string): string
 	return r;
 }
 
-scgirequest(path, scgipath: string, req: ref Req, op: ref Op, length: big): array of byte
+cgivars(path, cgipath: string, req: ref Req, op: ref Op, length: big, environ: list of (string, string)): list of (string, string)
 {
 	servername := req.h.get("host");
 	if(servername == nil)
 		servername = op.lhost;
-	pathinfo := path[len scgipath:];
-	l  :=	("CONTENT_LENGTH",	string length)::
+	pathinfo := path[len cgipath:];
+	return	("CONTENT_LENGTH",	string length)::
 		("GATEWAY_INTERFACE",	"CGI/1.1")::
 		("SERVER_PROTOCOL",	http->versionstr(req.version()))::
 		("SERVER_NAME",		servername)::
@@ -1004,7 +1085,12 @@ scgirequest(path, scgipath: string, req: ref Req, op: ref Op, length: big): arra
 		("SERVER_PORT",		op.lport)::
 		("REMOTE_ADDR",		op.rhost)::
 		("REMOTE_PORT",		op.rport)::
-		environment;
+		environ;
+}
+
+scgirequest(path, scgipath: string, req: ref Req, op: ref Op, length: big): array of byte
+{
+	l := cgivars(path, scgipath, req, op, length, environment);
 	s := "";
 	for(h := l; h != nil; h = tl h)
 		s += (hd h).t0+"\0"+(hd h).t1+"\0";

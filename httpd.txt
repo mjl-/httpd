@@ -4,7 +4,7 @@ ndb/cs
 cd
 cd src/httpd/appl/cmd
 sblpath=(/dis .)
-./httpd -dhl -A /test/ 'special place' test:test -c 10 -i index.html -r /scgi /scgi/test -t .oink 'text/plain; charset=utf-8' -s /scgi/ net!localhost!4006 -s /nscgi/ net!localhost!4007 -s /post net!localhost!4008 -s /sleep4 net!localhost!4009 -s /sleep5 net!localhost!4011 -s /sleep6 net!localhost!4012 /tmp &
+./httpd -dhl -A /test/ 'special place' test:test -C 10 -i index.html -r /scgi /scgi/test -t .oink 'text/plain; charset=utf-8' -s /scgi/ net!localhost!4006 -s /nscgi/ net!localhost!4007 -s /post net!localhost!4008 -c /cgi {echo Status: 200 OK; echo; du -a /} -c /env {echo Status: 200 OK; echo; echo /env/*; load std; for(i in /env/*) {echo $i^'='^`{cat $i}}} /tmp &
 
 emu -c0
 bind '#U*/home' /usr

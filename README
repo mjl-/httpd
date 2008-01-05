@@ -2,7 +2,7 @@ httpd is a simple httpd.
 
 features:
 - http/1.0, http/1.1 (keep-alive, chunked responses).  no "http/0.9".
-- scgi support
+- cgi and scgi support
 - virtual hosts
 - determining content-type based on file extension
 - error/access logging
@@ -11,8 +11,7 @@ features:
 - redirections
 
 todo:
-- better scgid sanity checking
-- normal cgi?
+- better cgi sanity checking
 - better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
 
 - support transfer-encoding chunked and compressed content-encodings from client?
