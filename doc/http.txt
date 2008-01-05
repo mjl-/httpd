@@ -128,7 +128,7 @@ headers that clients send but can safely be ignored, but are quite useful and re
 
 headers that clients send and really really should be implemented (perhaps partially): `Connection`, `Content-Encoding`, `Content-Length`, `Content-Type`, `Expect`, `Host`, `If-Match`, `If-Unmodified-Since`, `Transfer-Encoding`.
 
-for security, some headers should be handled specially.  when a `Proxy-Authorization` is sent to a server it should respond with 400 "bad request", this should just never happen.  when a `Authorization` header is sent for a path on a server that doesn't need authentication, it should only be accepted when the user/pass are empty strings;  for anything else, a 401 "unauthorized" should be send.
+for security, some headers should be handled specially.  when a `Proxy-Authorization` is sent to a server it should respond with 400 "bad request", this should just never happen.  when a `Authorization` header is sent for a path on a server that doesn't need authentication, it should only be accepted when the user/pass are empty strings;  for anything else, a 401 "unauthorized" should be send.  note that is not specified by the specification but should protect users from spewing their credentials around.
 
 # on specific headers
 

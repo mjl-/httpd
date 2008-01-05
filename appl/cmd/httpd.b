@@ -50,6 +50,7 @@ environment: list of (string, string);
 indexfiles: list of string;
 redirs: list of (string, string);
 auths: list of (string, string, string);
+credempty: string;
 
 Httpd: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -197,6 +198,7 @@ init(nil: ref Draw->Context, args: list of string)
 	indexfiles = rev(indexfiles);
 	redirs = rev2(redirs);
 	auths = rev3(auths);
+	credempty = base64->enc(array of byte ":");
 
 	environment = env->getall();
 
@@ -429,6 +431,10 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(needauth && !haveauth) {
 		resp.h.add("www-authenticate", sprint("Basic realm=\"%s\"", realm));	# xxx doublequote-quote realm?
 		return responderrmsg(op, Eunauthorized, nil);
+	}
+	if(req.h.has("authorization", nil) && !needauth && cred != credempty) {
+		resp.h.add("www-authenticate", sprint("Basic realm=\"authentication not allowed\""));
+		return responderrmsg(op, Eunauthorized, "You sent authorization credentials which is not allowed by this resource.  Please use an empty username and password or do not send authorization credentials altogether.");
 	}
 
 	for(r := redirs; r != nil; r = tl r) {
