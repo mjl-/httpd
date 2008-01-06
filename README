@@ -11,7 +11,7 @@ features:
 - redirections
 
 todo:
-- fix post, at least on scgi.  test on cgi.  test for lingering procs on aborted post.
+- test for lingering procs on aborted post.
 - sort cgi/scgi paths on length
 - redirects based on path rewriting?
 - better cgi sanity checking

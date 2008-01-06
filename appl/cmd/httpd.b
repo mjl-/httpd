@@ -40,6 +40,7 @@ Op: adt {
 	chunked:	int;
 	length:		big;
 	fd:	ref Sys->FD;
+	b:	ref Bufio->Iobuf;
 	rhost, rport, lhost, lport:	string;
 	req:	ref Req;
 	resp:	ref Resp;
@@ -390,7 +391,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 	if(b == nil)
 		die(id, sprint("bufio open: %r"));
 
-	op := ref Op(id, 0, 0, 0, big 0, fd, rhost, rport, lhost, lport, nil, nil);
+	op := ref Op(id, 0, 0, 0, big 0, fd, b, rhost, rport, lhost, lport, nil, nil);
 
 	for(nsrvs := 0; ; nsrvs++) {
 		if(nsrvs > 0 && !op.keepalive)
@@ -781,6 +782,8 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 				return responderrmsg(op, Eexpectationfailed, sprint("Unrecognized Expectectation: %q (note: Only single values in the simplest syntax are accepted)", expect));
 			fprint(op.fd, "HTTP/1.1 100 Continue\r\n\r\n");
 		}
+
+		chat(id, sprint("post, client content-length %bd", length));
 	}
 
 	chat(id, sprint("handling cgi request, cgipath %q cgiaction %q cgitype %s, pid %d timeopid %d", cgipath, cgiaction, cgitypes[cgitype], sys->pctl(0, nil), timeopid));
@@ -809,7 +812,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 	}
 
 	if(length > big 0)
-		spawn cgifunnel(op.fd, fd0, length);
+		spawn cgifunnel(op.b, fd0, length);
 
 	sb := bufio->fopen(fd1, Bufio->OREAD);
 	if(sb == nil) {
@@ -881,10 +884,13 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 	chat(id, "request done");
 }
 
-cgifunnel(fd, sfd: ref Sys->FD, length: big)
+cgifunnel(b: ref Iobuf, sfd: ref Sys->FD, length: big)
 {
 	while(length > big 0) {
-		n := sys->read(fd, d := array[Sys->ATOMICIO] of byte, len d);
+		need := Sys->ATOMICIO;
+		if(big need > length)
+			need = int length;
+		n := b.read(d := array[need] of byte, len d);
 		if(n < 0)
 			fail(sprint("fail:cgi read: %r"));
 		if(n == 0)
