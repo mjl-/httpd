@@ -34,6 +34,7 @@ prefix: import str;
 
 Version: con "nhttpd/0";
 
+# represents a connection and a request on it
 Op: adt {
 	id, now:	int;
 	keepalive:	int;
@@ -48,9 +49,10 @@ Op: adt {
 
 cgitimeoutsecs: con 3*60;
 
-dflag, hflag, lflag: int;
+debugflag, vhostflag, listingflag: int;
 cachesecs := 0;
-addr := "net!localhost!8000";
+defaddr := "net!localhost!8000";
+addrs: list of string;
 webroot := "";
 environment: list of (string, string);
 indexfiles: list of string;
@@ -188,13 +190,12 @@ init(nil: ref Draw->Context, args: list of string)
 		case c {
 		'A' =>	auths = (arg->earg(), arg->earg(), base64->enc(array of byte arg->earg()))::auths;
 		'C' =>	cachesecs = int arg->earg();
-		'a' =>	addr = arg->earg();
+		'a' =>	addrs = arg->earg()::addrs;
 		'c' =>	cgipaths = (arg->earg(), arg->earg(), Cgi)::cgipaths;
-		'd' =>	dflag++;
-		'h' =>	hflag++;
+		'd' =>	debugflag++;
+		'h' =>	vhostflag++;
 		'i' =>	indexfiles = arg->earg()::indexfiles;
-		'l' =>	lflag++;
-			http->debug = 1;
+		'l' =>	listingflag++;
 		'r' =>	redirs = (arg->earg(), arg->earg())::redirs;
 		's' =>	cgipaths = (arg->earg(), arg->earg(), Scgi)::cgipaths;
 		't' =>	(extension, mimetype) := (arg->earg(), arg->earg());
@@ -213,11 +214,13 @@ init(nil: ref Draw->Context, args: list of string)
 	auths = rev3(auths);
 	credempty = base64->enc(array of byte ":");
 
-	cgipaths = orderlong(cgipaths);
+	# order, longest path first.  for matching most specific paths first.
+	cgipaths = orderlong0(cgipaths);
+	redirs = orderlong1(redirs);
 
 	environment = env->getall();
 
-	sys->pctl(Sys->FORKNS, nil);
+	sys->pctl(Sys->FORKNS|Sys->FORKENV|Sys->FORKFD, nil);
 	if(sys->chdir(webroot) != 0)
 		fail(sprint("chdir webroot %s: %r", webroot));
 
@@ -225,8 +228,8 @@ init(nil: ref Draw->Context, args: list of string)
 	if(timefd == nil)
 		fail(sprint("open /dev/time: %r"));
 
-	errorfd = sys->open("/services/logs/httpderror", Sys->ORDWR);
-	accessfd = sys->open("/services/logs/httpdaccess", Sys->ORDWR);
+	errorfd = sys->open("/services/logs/httpderror", Sys->OWRITE);
+	accessfd = sys->open("/services/logs/httpdaccess", Sys->OWRITE);
 	if(errorfd != nil)
 		sys->seek(errorfd, big 0, Sys->SEEKEND);
 	if(accessfd != nil)
@@ -248,6 +251,14 @@ init(nil: ref Draw->Context, args: list of string)
 	scgidialch = chan of (string, chan of (ref Sys->FD, string));
 	spawn scgidialer();
 
+	if(addrs == nil)
+		addrs = defaddr::nil;
+	for(addrs = rev(addrs); addrs != nil; addrs = tl addrs)
+		spawn announce(hd addrs);
+}
+
+announce(addr: string)
+{
 	(aok, aconn) := sys->announce(addr);
 	if(aok != 0)
 		fail(sprint("announce %s: %r", addr));
@@ -304,7 +315,10 @@ exceptsetter()
 		fd := sys->open(sprint("/prog/%d/ctl", pid), Sys->OWRITE);
 		if(fd == nil || fprint(fd, "exceptions notifyleader") == -1)
 			err = sprint("setting exception handling for pid %d: %r", pid);
-		respch <-= err;
+		if(respch == nil && err != nil)
+			fail("exceptsetter: "+err);
+		if(respch != nil)
+			respch <-= err;
 	}
 }
 
@@ -335,7 +349,6 @@ cgispawn(cmd, path, cgipath: string, req: ref Req, op: ref Op, length: big, repl
 		env->setenv((hd l).t0, (hd l).t1);
 
 	if(sys->dup(fd0[1].fd, 0) == -1 || sys->dup(fd1[1].fd, 1) == -1 || sys->dup(fd2[1].fd, 2) == -1) {
-		say(sprint("dup: %r"));
 		replych <-= (nil, nil, sprint("dup: %r"));
 		return;
 	}
@@ -343,7 +356,7 @@ cgispawn(cmd, path, cgipath: string, req: ref Req, op: ref Op, length: big, repl
 	fd0 = fd1 = fd2 = nil;
 	err := sh->system(nil, cmd);
 	if(err != nil)
-		chat(-1, sprint("cgispawn, cmd %q: %s", cmd, err));
+		say(sprint("cgispawn, cmd %q: %s", cmd, err));
 }
 
 errlogger(fd: ref Sys->FD)
@@ -385,9 +398,10 @@ httpserve(fd: ref Sys->FD, conndir: string)
 	(rhost, rport) := readaddr(id, conndir+"/remote");
 	chat(id, sprint("connect from %s:%s to %s:%s", rhost, rport, lhost, lport));
 
-	sys->pctl(Sys->NEWPGRP, nil);
-	exc->setexcmode(Exception->NOTIFYLEADER);
-	pid := sys->pctl(Sys->NEWNS|Sys->NODEVS, nil);
+	pid := sys->pctl(Sys->NEWPGRP|Sys->FORKNS|Sys->NODEVS, nil);
+	excch <-= (pid, nil);
+	if(sys->bind(webroot,  "/", Sys->MREPL) < 0)
+		die(id, sprint("bind %q /: %r", webroot));
 
 	b := bufio->fopen(fd, Bufio->OREAD);
 	if(b == nil)
@@ -403,7 +417,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 			break;
 
 		op.chunked = op.keepalive = 0;
-		op.length = big 0;
+		op.length = big -1;
 		httptransact(pid, b, op);
 	}
 }
@@ -447,9 +461,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		if(len req.h.findall(nomergeheaders[i]) > 1)
 			return responderrmsg(op, Ebadrequest, sprint("Bad Request: You sent duplicate headers for \"%s\"", nomergeheaders[i]));
 
-	# we are not a proxy, this indicates a client credentials...
 	if(req.h.has("proxy-authorization", nil))
-		return responderrmsg(op, Ebadrequest, "Bad Request: You sent Proxy-Authorization credentials");
+		return responderrmsg(op, Ebadrequest, "Bad Request: You or a proxy server sent Proxy-Authorization credentials");
 
 	if(req.version() >= HTTP_11 && !req.h.has("host", nil))
 		return responderrmsg(op, Ebadrequest, "Bad Request: Missing header \"Host\".");
@@ -489,8 +502,9 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		if(str->drop(hostdir, "0-9a-zA-Z.-") != nil || str->splitstrl(hostdir, "..").t1 != nil)
 			return responderrmsg(op, Enotfound, nil);
 	}
-	if(hflag && sys->chdir(hostdir) != 0) {
+	if(vhostflag && sys->chdir(hostdir) != 0) {
 		hostdir = "_default";
+		# according to the spec, this error should send a "bad request" response...
 		if(havehost && sys->chdir(hostdir) != 0)
 			return responderrmsg(op, Enotfound, nil);
 	}
@@ -558,7 +572,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 			break;
 		}
 	}
-	if(dfd == nil || dok != 0 || (dir.mode&Sys->DMDIR) && (!lflag || path != nil && path[len path-1] != '/'))
+	if(dfd == nil || dok != 0 || (dir.mode&Sys->DMDIR) && (!listingflag || path != nil && path[len path-1] != '/'))
 		return responderrmsg(op, Enotfound, nil);
 
 	if(req.method == POST) {
@@ -719,11 +733,17 @@ timeout(op: ref Op, timeo: int, timeoch, donech: chan of int)
 
 cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: int, cgich, donech: chan of int)
 {
+	# set up new process group and exception propagation so
+	# we always clean up nicely when one of the child procs dies.
+	# we always have to respond on donech (or be killed by the timeout
+	# proc) or we'll leave processes lingering
 	npid := sys->pctl(Sys->NEWPGRP, nil);
 	if(npid < 0) {
 		killch <-= timeopid;
 		chat(op.id, sprint("pctl newpgr: %r"));
 		responderrmsg(op, Eservererror, nil);
+		donech <-= 0;
+		return;
 	}
 	excch <-= (npid, respch := chan of string);
 	err := <-respch;
@@ -759,7 +779,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 		if(req.h.has("content-length", nil)) {
 			lengthstr := req.h.get("content-length");
 			if(lengthstr == nil || str->drop(lengthstr, "0-9") != "")
-				return responderrmsg(op, Ebadrequest, "Bad Request: Invalid Content-Length: "+lengthstr);
+				return responderrmsg(op, Ebadrequest, sprint("Bad Request: Invalid Content-Length: %q", lengthstr));
 			length = big lengthstr;
 		} else {
 			e := Elengthrequired;
@@ -826,7 +846,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 	killch <-= timeopid;
 	if(!prefix("status:", str->tolower(l))) {
 		chat(id, "bad cgi response line: "+l);
-		return responderrmsg(op, Eservererror, nil);
+		return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
 	}
 	l = str->drop(l[len "status:":], " \t");
 	(resp.st, resp.stmsg) = str->splitstrl(l, " ");
@@ -834,27 +854,27 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 		resp.stmsg = droptl(resp.stmsg[1:], " \t\r\n");
 	if(len resp.st != 3 || str->drop(resp.st, "0-9") != "") {
 		chat(id, "bad cgi response line: "+l);
-		return responderrmsg(op, Eservererror, nil);
+		return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
 	}
-
-	accesslog(op);
 
 	(hdrs, rerr) := Hdrs.read(sb);
 	if(rerr != nil) {
 		chat(id, "reading cgi headers: "+rerr);
-		return responderrmsg(op, Eservererror, nil);
+		return responderrmsg(op, Eservererror, "Internal Server Error:  Error reading headers from handler");
 	}
 	elength := big -1;
 	if(hdrs.has("content-length", nil)) {
 		elengthstr := hdrs.get("content-length");
 		if(elengthstr == nil || str->drop(elengthstr, "0-9") != "") {
 			chat(id, "bad cgi content-length header: "+elengthstr);
-			return responderrmsg(op, Eservererror, nil);
+			return responderrmsg(op, Eservererror, "Internal Server Error:  Invalid content-length from handler");
 		}
-		elength = big elengthstr;
+		op.length = elength = big elengthstr;
 	}
 	for(hl := hdrs.all(); hl != nil; hl = tl hl)
 		resp.h.add((hd hl).t0, (hd hl).t1);
+
+	accesslog(op);
 
 	op.chunked = elength == big -1 && resp.version() >= HTTP_11;
 	rerr = hresp(resp, op.fd, op.keepalive, op.chunked);
@@ -1003,7 +1023,7 @@ maxage(nil: string): string
 accesslog(op: ref Op)
 {
 	length := "";
-	if(!op.chunked)
+	if(!op.chunked && op.length >= big 0)
 		length = string op.length;
 	if(accessfd != nil && op.req != nil)
 		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.url.pack(), sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg, length, op.req.h.get("user-agent"));
@@ -1457,17 +1477,39 @@ rev[T](l: list of T): list of T
 	return r;
 }
 
-orderlong(l: list of (string, string, int)): list of (string, string, int)
+orderlong0(l: list of (string, string, int)): list of (string, string, int)
 {
 	if(l == nil)
 		return nil;
-	(first, rem) := longest(l);
-	return first::orderlong(rem);
+	(first, rem) := longest0(l);
+	return first::orderlong0(rem);
 }
 
-longest(l: list of (string, string, int)): ((string, string, int), list of (string, string, int))
+longest0(l: list of (string, string, int)): ((string, string, int), list of (string, string, int))
 {
 	r: list of (string, string, int);
+	long := hd l;
+	for(l = tl l; l != nil; l = tl l)
+		if(len (hd l).t0 > len long.t0) {
+			r = long::r;
+			long = hd l;
+		} else {
+			r = hd l::r;
+		}
+	return (long, r);
+}
+
+orderlong1(l: list of (string, string)): list of (string, string)
+{
+	if(l == nil)
+		return nil;
+	(first, rem) := longest1(l);
+	return first::orderlong1(rem);
+}
+
+longest1(l: list of (string, string)): ((string, string), list of (string, string))
+{
+	r: list of (string, string);
 	long := hd l;
 	for(l = tl l; l != nil; l = tl l)
 		if(len (hd l).t0 > len long.t0) {
@@ -1488,7 +1530,7 @@ kill(pid: int)
 
 say(s: string)
 {
-	if(dflag)
+	if(debugflag)
 		fprint(fildes(2), "%s\n", s);
 	if(errorfd != nil)
 		fprint(errorfd, "%s\n", s);

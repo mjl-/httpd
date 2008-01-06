@@ -12,7 +12,6 @@ features:
 
 todo:
 - redirects based on path rewriting?
-- better cgi sanity checking
 - better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
 
 - support transfer-encoding chunked and compressed content-encodings from client?
