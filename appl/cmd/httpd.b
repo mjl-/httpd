@@ -32,6 +32,7 @@ Url, Req, Resp, Hdrs, HTTP_10, HTTP_11, encodepath: import http;
 OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, CONNECT: import http;
 prefix: import str;
 
+Version: con "nhttpd/0";
 
 Op: adt {
 	id, now:	int;
@@ -408,7 +409,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 {
 	id := op.now;
 	op.now = readtime();
-	hdrs := Hdrs.new(("server", "nhttpd/0")::nil);
+	hdrs := Hdrs.new(("server", Version)::nil);
 
 	killschedch <-= (pid, 3*60*1000, respch := chan of int);
 	killpid := <-respch;
@@ -1071,27 +1072,30 @@ cgivars(path, cgipath: string, req: ref Req, op: ref Op, length: big, environ: l
 	if(servername == nil)
 		servername = op.lhost;
 	pathinfo := path[len cgipath:];
+	query := req.url.query;
+	if(query != nil)
+		query = query[1:];
 	return	("CONTENT_LENGTH",	string length)::
 		("GATEWAY_INTERFACE",	"CGI/1.1")::
 		("SERVER_PROTOCOL",	http->versionstr(req.version()))::
 		("SERVER_NAME",		servername)::
-		("SCGI",		"1")::
 		("REQUEST_METHOD",	http->methodstr(req.method))::
-		("REQUEST_URI",		path)::
-		("SCRIPT_NAME",		path)::
+		("REQUEST_URI",		req.url.packpath())::
+		("SCRIPT_NAME",		cgipath)::
 		("PATH_INFO",		pathinfo)::
 		("PATH_TRANSLATED",	pathinfo)::
-		("QUERY_STRING",	req.url.query)::
+		("QUERY_STRING",	query)::
 		("SERVER_ADDR",		op.lhost)::
 		("SERVER_PORT",		op.lport)::
 		("REMOTE_ADDR",		op.rhost)::
 		("REMOTE_PORT",		op.rport)::
+		("SERVER_SOFTWARE",	Version)::
 		environ;
 }
 
 scgirequest(path, scgipath: string, req: ref Req, op: ref Op, length: big): array of byte
 {
-	l := cgivars(path, scgipath, req, op, length, environment);
+	l := ("SCGI", "1")::cgivars(path, scgipath, req, op, length, environment);
 	s := "";
 	for(h := l; h != nil; h = tl h)
 		s += (hd h).t0+"\0"+(hd h).t1+"\0";
