@@ -11,8 +11,6 @@ features:
 - redirections
 
 todo:
-- test for lingering procs on aborted post.
-- sort cgi/scgi paths on length
 - redirects based on path rewriting?
 - better cgi sanity checking
 - better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?

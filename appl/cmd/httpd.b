@@ -213,6 +213,8 @@ init(nil: ref Draw->Context, args: list of string)
 	auths = rev3(auths);
 	credempty = base64->enc(array of byte ":");
 
+	cgipaths = orderlong(cgipaths);
+
 	environment = env->getall();
 
 	sys->pctl(Sys->FORKNS, nil);
@@ -733,7 +735,7 @@ cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: int
 		# catch exceptions (e.g. when writing to remote fails), to make sure our caller can return
 		{ _cgi(path, op, cgipath, cgiaction, cgitype, timeopid, cgich); }
 		exception {
-		* =>	;
+		* =>	killch <-= timeopid;	# may already be killed
 		}
 	}
 	donech <-= 0;
@@ -1453,6 +1455,28 @@ rev[T](l: list of T): list of T
 	for(; l != nil; l = tl l)
 		r = hd l::r;
 	return r;
+}
+
+orderlong(l: list of (string, string, int)): list of (string, string, int)
+{
+	if(l == nil)
+		return nil;
+	(first, rem) := longest(l);
+	return first::orderlong(rem);
+}
+
+longest(l: list of (string, string, int)): ((string, string, int), list of (string, string, int))
+{
+	r: list of (string, string, int);
+	long := hd l;
+	for(l = tl l; l != nil; l = tl l)
+		if(len (hd l).t0 > len long.t0) {
+			r = long::r;
+			long = hd l;
+		} else {
+			r = hd l::r;
+		}
+	return (long, r);
 }
 
 kill(pid: int)
