@@ -11,6 +11,7 @@ features:
 - redirections
 
 todo:
+- verify that incoming connections for host x are on the correct ip
 - redirects based on path rewriting?
 - better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
 

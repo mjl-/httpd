@@ -54,11 +54,13 @@ cachesecs := 0;
 defaddr := "net!localhost!8000";
 addrs: list of string;
 webroot := "";
-environment: list of (string, string);
 indexfiles: list of string;
 redirs: list of (string, string);
 auths: list of (string, string, string);
 credempty: string;
+cgipaths: list of (string, string, int);
+
+environment: list of (string, string);
 
 Httpd: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -163,7 +165,6 @@ accessfd: ref Sys->FD;
 
 Cgi, Scgi: con iota;
 cgitypes := array[] of {"cgi", "scgi"};
-cgipaths: list of (string, string, int);
 
 cgispawnch: chan of (string, string, string, ref Req, ref Op, big, chan of (ref Sys->FD, ref Sys->FD, string));
 scgidialch: chan of (string, chan of (ref Sys->FD, string));
@@ -1026,7 +1027,7 @@ accesslog(op: ref Op)
 	if(!op.chunked && op.length >= big 0)
 		length = string op.length;
 	if(accessfd != nil && op.req != nil)
-		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.url.pack(), sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg, length, op.req.h.get("user-agent"));
+		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.h.get("host"), op.req.url.path, sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg, length, op.req.h.get("user-agent"), op.req.h.get("referer"));
 }
 
 findcgi(path: string): (string, string, int)
