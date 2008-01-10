@@ -143,6 +143,13 @@ types := array[] of {
 	(".tex",	"text/plain; charset=utf-8"),
 	(".mp4",	"video/mp4"),
 	(".mpg",	"video/mpeg"),
+	(".ms",		"text/plain; charset=utf-8"),
+	(".roff",	"text/plain; charset=utf-8"),
+	(".man",	"text/plain; charset=utf-8"),
+	(".me",		"text/plain; charset=utf-8"),
+	(".tif",	"image/tiff"),
+	(".tiff",	"image/tiff"),
+	(".bin",	"application/octet-stream"),
 };
 
 Eok:			con 200;
