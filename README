@@ -11,10 +11,24 @@ features:
 - redirections
 
 todo:
-- verify that incoming connections for host x are on the correct ip
-- redirects based on path rewriting?
 - better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
+	- aliases for host/port configs
+	- verify local ip is in allowed list for request
+	- if no listen ips have been specified, allow on all.  if any has been specified, enforce.
+	- use host:port for vhost dirs
+	- config reloading.  on explicit request only?  over file2chan thing
+	- make sure command-line options make sense now (work)
+	- do all changeable config options work after reload?
 
+- fix the ugly reversing of config elements at startup?
+- run as unprivileged user
+- redirects based on path rewriting?
+- better messages in errorlog
+- write events to error log:  started, reloaded
+- write man page
+
+- split config loading in separate module?
+- do hostname lookups for config "listen"?  instead of just ips
 - support transfer-encoding chunked and compressed content-encodings from client?
 - check for security issues with http
 - check spec which error responses must be with/without body

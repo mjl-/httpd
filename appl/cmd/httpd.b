@@ -14,6 +14,8 @@ include "keyring.m";
 include "security.m";
 include "encoding.m";
 include "sh.m";
+include "ip.m";
+include "attrdb.m";
 include "mhttp.m";
 
 sys: Sys;
@@ -25,14 +27,45 @@ random: Random;
 str: String;
 base64: Encoding;
 sh: Sh;
+ipm: IP;
+attrdb: Attrdb;
 http: Http;
 
 print, sprint, fprint, fildes: import sys;
 Url, Req, Resp, Hdrs, HTTP_10, HTTP_11, encodepath: import http;
 OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, CONNECT: import http;
 prefix: import str;
+IPaddr: import ipm;
+Db, Dbentry, Tuples: import attrdb;
 
 Version: con "nhttpd/0";
+
+# configs, one cfg per host/port pair
+Cfgs: adt {
+	file:	string;
+	db:	ref Db;
+	default:	ref Cfg;
+	configs:	list of (string, string, ref Cfg);
+	getch:	chan of (string, string, chan of (ref Cfg, string));
+
+	init:	fn(file: string): (ref Cfgs, string);
+	get:	fn(c: self ref Cfgs, host, port: string): (ref Cfg, string);
+};
+
+# config for a single host/port pair
+Cfg: adt {
+	host, port:	string;
+	listings, cachesecs:	int;
+	addrs:	list of ref (string, string);	# ip, port
+	cgipaths:	list of (string, string, int);	# path, cmd|addr, cgi|scgi
+	indexfiles:	list of string;
+	redirs:	list of (string, string);	# srcpath, destpath
+	auths:	list of (string, string, string);	# path, realm, base64 user:pass
+
+	new:	fn(): ref Cfg;
+};
+
+cfgs: ref Cfgs;
 
 # represents a connection and a request on it
 Op: adt {
@@ -45,20 +78,17 @@ Op: adt {
 	rhost, rport, lhost, lport:	string;
 	req:	ref Req;
 	resp:	ref Resp;
+	cfg:	ref Cfg;
 };
 
 cgitimeoutsecs: con 3*60;
 
-debugflag, vhostflag, listingflag: int;
-cachesecs := 0;
-defaddr := "net!localhost!8000";
+debugflag, vhostflag: int;
+defaddr := "net!*!8000";
 addrs: list of string;
 webroot := "";
-indexfiles: list of string;
-redirs: list of (string, string);
-auths: list of (string, string, string);
 credempty: string;
-cgipaths: list of (string, string, int);
+ctlchan := "";
 
 environment: list of (string, string);
 
@@ -182,23 +212,47 @@ init(nil: ref Draw->Context, args: list of string)
 	str = load String String->PATH;
 	base64 = load Encoding Encoding->BASE64PATH;
 	sh = load Sh Sh->PATH;
+	ipm = load IP IP->PATH;
+	ipm->init();
+	attrdb = load Attrdb Attrdb->PATH;
+	err := attrdb->init();
+	if(err != nil)
+		fail("loading attrdb: "+err);
 	http = load Http Http->PATH;
 	http->init(bufio);
 
+	(cfgs, err) = Cfgs.init("/dev/null");
+	if(err != nil)
+		fail("making empty config: "+err);
+	defcfg := cfgs.default = Cfg.new();
+
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-dhl] [-A path realm user:pass] [-C cachesecs] [-a addr] [-c path command] [-i indexfile] [-r orig new] [-s path addr] [-t extention mimetype] webroot");
+	arg->setusage(arg->progname()+" [-dhl] [-A path realm user:pass] [-C cachesecs] [-a addr] [-c path command] [-f chanfile] [-i indexfile] [-n config] [-r orig new] [-s path addr] [-t extention mimetype] webroot");
 	while((c := arg->opt()) != 0)
 		case c {
-		'A' =>	auths = (arg->earg(), arg->earg(), base64->enc(array of byte arg->earg()))::auths;
-		'C' =>	cachesecs = int arg->earg();
+		'A' =>	defcfg.auths = (arg->earg(), arg->earg(), base64->enc(array of byte arg->earg()))::defcfg.auths;
+		'C' =>	defcfg.cachesecs = int arg->earg();
 		'a' =>	addrs = arg->earg()::addrs;
-		'c' =>	cgipaths = (arg->earg(), arg->earg(), Cgi)::cgipaths;
+		'c' =>	defcfg.cgipaths = (arg->earg(), arg->earg(), Cgi)::defcfg.cgipaths;
 		'd' =>	debugflag++;
+		'f' =>	ctlchan = arg->earg();
 		'h' =>	vhostflag++;
-		'i' =>	indexfiles = arg->earg()::indexfiles;
-		'l' =>	listingflag++;
-		'r' =>	redirs = (arg->earg(), arg->earg())::redirs;
-		's' =>	cgipaths = (arg->earg(), arg->earg(), Scgi)::cgipaths;
+		'i' =>	defcfg.indexfiles = arg->earg()::defcfg.indexfiles;
+		'l' =>	defcfg.listings++;
+		'n' =>
+			file := arg->earg();
+			(cfgs, err) = Cfgs.init(file);
+			if(err != nil) {
+				fprint(fildes(2), "reading %q: %s\n", file, err);
+				raise "fail:usage";
+			}
+			defcfg.addrs = rev(defcfg.addrs);
+			defcfg.cgipaths = revo(defcfg.cgipaths);
+			defcfg.indexfiles = rev(defcfg.indexfiles);
+			defcfg.redirs = rev2(defcfg.redirs);
+			defcfg.auths = rev3(defcfg.auths);
+		'r' =>	defcfg.redirs = (arg->earg(), arg->earg())::defcfg.redirs;
+		's' =>	defcfg.cgipaths = (arg->earg(), arg->earg(), Scgi)::defcfg.cgipaths;
 		't' =>	(extension, mimetype) := (arg->earg(), arg->earg());
 			ntypes := array[len types+1] of (string, string);
 			ntypes[0] = (extension, mimetype);
@@ -210,16 +264,21 @@ init(nil: ref Draw->Context, args: list of string)
 	if(len args != 1)
 		arg->usage();
 	webroot = hd args;
-	indexfiles = rev(indexfiles);
-	redirs = rev2(redirs);
-	auths = rev3(auths);
+	defcfg.addrs = rev(defcfg.addrs);
+	defcfg.cgipaths = revo(defcfg.cgipaths);
+	defcfg.indexfiles = rev(defcfg.indexfiles);
+	defcfg.redirs = rev2(defcfg.redirs);
+	defcfg.auths = rev3(defcfg.auths);
 	credempty = base64->enc(array of byte ":");
 
-	# order, longest path first.  for matching most specific paths first.
-	cgipaths = orderlong0(cgipaths);
-	redirs = orderlong1(redirs);
-
 	environment = env->getall();
+
+	if(ctlchan != nil) {
+		fileio := sys->file2chan("/chan", ctlchan);
+		if(fileio == nil)
+			fail(sprint("file2chan in /chan: %q: %r", ctlchan));
+		spawn ctlhandler(fileio);
+	}
 
 	sys->pctl(Sys->FORKNS|Sys->FORKENV|Sys->FORKFD, nil);
 	if(sys->chdir(webroot) != 0)
@@ -390,6 +449,43 @@ scgidial(scgiaddr: string, replychan: chan of (ref Sys->FD, string))
 		replychan <-= (conn.dfd, nil);
 }
 
+ctlhandler(fio: ref Sys->FileIO)
+{
+	for(;;) alt {
+	(nil, nil, nil, rc) := <- fio.read =>
+		if(rc == nil)
+			continue;
+		rc <-= (nil, "permission denied");
+
+        (nil, data, nil, wc) := <- fio.write =>
+                if(wc == nil)
+                        continue;
+		s := string data;
+		if(s != nil && s[len s-1] == '\n')
+			s = s[:len s-1];
+		case s {
+		"reload" =>
+			say("reloading db");
+			if(cfgs.db.reopen() != 0) {
+				msg := sprint("reopening config files: %r");
+				say(msg);
+				wc <-= (0, msg);
+				continue;
+			}
+			err := cfgsread(cfgs);
+			if(err != nil) {
+				msg := "error reloading config, keeping current: "+err;
+				say(msg);
+				wc <-= (0, msg);
+				continue;
+			}
+			wc <-= (len data, nil);
+		* =>
+			wc <-= (0, sprint("bad command: %q", s));
+		}
+	}
+}
+
 httpserve(fd: ref Sys->FD, conndir: string)
 {
 	id := <-idch;
@@ -408,7 +504,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 	if(b == nil)
 		die(id, sprint("bufio open: %r"));
 
-	op := ref Op(id, 0, 0, 0, big 0, fd, b, rhost, rport, lhost, lport, nil, nil);
+	op := ref Op(id, 0, 0, 0, big 0, fd, b, rhost, rport, lhost, lport, nil, nil, nil);
 
 	for(nsrvs := 0; ; nsrvs++) {
 		if(nsrvs > 0 && !op.keepalive)
@@ -466,7 +562,35 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		return responderrmsg(op, Ebadrequest, "Bad Request: You or a proxy server sent Proxy-Authorization credentials");
 
 	if(req.version() >= HTTP_11 && !req.h.has("host", nil))
-		return responderrmsg(op, Ebadrequest, "Bad Request: Missing header \"Host\".");
+		return responderrmsg(op, Ebadrequest, "Bad Request: Missing header \"Host\"");
+
+	host := str->splitl(req.h.get("host"), ":").t0;
+	(cfg, err) := cfgs.get(host, op.lport);
+	if(err == "no config")
+		return responderrmsg(op, Enotfound, nil);
+	if(err != nil) {
+		say("getting config: "+err);
+		return responderrmsg(op, Eservererror, "Internal Server Error: Configuration not available");
+	}
+
+	# do not accept request when doing vhost and request is from ip that we shouldn't serve host:port on
+	addrokay := !vhostflag || cfg.addrs == nil;
+	if(!addrokay) {
+		for(as := cfg.addrs; !addrokay && as != nil; as = tl as) {
+			(chost, cport) := *(hd as);
+			say(sprint("testing config host %q port %q against connection host %q port %q", chost, cport, op.lhost, op.lport));
+			addrokay = chost == op.lhost && cport == op.lport;
+		}
+	}
+
+	if(cfg == nil || !addrokay) {
+		if(cfg == nil)
+			chat(id, sprint("no config for host %q port %q", host, op.lport));
+		else
+			chat(id, "request on not allowed ip:port");
+		return responderrmsg(op, Enotfound, nil);
+	}
+	op.cfg = cfg;
 
 	case req.method {
 	GET or HEAD or POST =>
@@ -497,14 +621,15 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	# we should send 400 "bad request" then, but that is just silly too.
 	(havehost, hostdir) := req.h.find("host");
 	if(!havehost) {
-		hostdir = "_default";
+		hostdir = "_default:"+cfg.port;
 	} else {
 		(hostdir, nil) = str->splitstrl(hostdir, ":");
 		if(str->drop(hostdir, "0-9a-zA-Z.-") != nil || str->splitstrl(hostdir, "..").t1 != nil)
 			return responderrmsg(op, Enotfound, nil);
+		hostdir += ":"+cfg.port;
 	}
 	if(vhostflag && sys->chdir(hostdir) != 0) {
-		hostdir = "_default";
+		hostdir = "_default:"+cfg.port;
 		# according to the spec, this error should send a "bad request" response...
 		if(havehost && sys->chdir(hostdir) != 0)
 			return responderrmsg(op, Enotfound, nil);
@@ -516,7 +641,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	(which, cred) = str->splitstrr(req.h.get("authorization"), " ");
 	if(str->tolower(which) != "basic ")
 		cred = nil;
-	for(a := auths; !haveauth && a != nil; a = tl a) {
+	for(a := cfg.auths; !haveauth && a != nil; a = tl a) {
 		(apath, arealm, acred) := hd a;
 		if(prefix(apath, path)) {
 			needauth = 1;
@@ -533,7 +658,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		return responderrmsg(op, Eunauthorized, "You sent authorization credentials which is not allowed by this resource.  Please use an empty username and password or do not send authorization credentials altogether.");
 	}
 
-	for(r := redirs; r != nil; r = tl r) {
+	for(r := cfg.redirs; r != nil; r = tl r) {
 		(orig, new) := hd r;
 		if(orig == path) {
 			resp.h.set("location", new);
@@ -543,7 +668,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	}
 
 	# if path is cgi-handled, let cgi() handle the request
-	if(((cgipath, cgiaction, cgitype) := findcgi(path)).t1 != nil) {
+	if(((cgipath, cgiaction, cgitype) := findcgi(cfg, path)).t1 != nil) {
 		timeo := cgitimeoutsecs*1000;
 		donech := chan of int;
 		spawn timeout(op, timeo, timeoch := chan of int, donech);
@@ -558,7 +683,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(dfd != nil)
 		(dok, dir) := sys->fstat(dfd);
 	if(dir.mode&Sys->DMDIR && path[len path-1] == '/') {
-		for(l := indexfiles; l != nil; l = tl l) {
+		for(l := cfg.indexfiles; l != nil; l = tl l) {
 			ipath := "."+path+hd l;
 			(iok, idir) := sys->stat(ipath);
 			if(iok != 0)
@@ -573,7 +698,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 			break;
 		}
 	}
-	if(dfd == nil || dok != 0 || (dir.mode&Sys->DMDIR) && (!listingflag || path != nil && path[len path-1] != '/'))
+	if(dfd == nil || dok != 0 || (dir.mode&Sys->DMDIR) && (!cfg.listings || path != nil && path[len path-1] != '/'))
 		return responderrmsg(op, Enotfound, nil);
 
 	if(req.method == POST) {
@@ -605,8 +730,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(req.version() >= HTTP_11 && (ifunmodsince && dir.mtime > ifunmodsince || ifunmodsincestr != nil && !ifunmodsince))
 		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: object has been modified since %s", req.h.get("if-unmodified-since")));
 
-	if(cachesecs)
-		resp.h.add("cache-control", maxage(path));
+	if(cfg.cachesecs)
+		resp.h.add("cache-control", maxage(op.cfg, path));
 
 	if(dir.mode & Sys->DMDIR)
 		listdir(path, op, dfd);
@@ -1016,9 +1141,9 @@ etag(path: string, op: ref Op, dir: Sys->Dir): string
 	return "\""+sha1(array of byte sprint("%d,%d,%s,%s,%s", dir.qid.vers, dir.mtime, host, op.lport, path))+"\"";
 }
 
-maxage(nil: string): string
+maxage(cfg: ref Cfg, nil: string): string
 {
-	return sprint("maxage=%d", cachesecs);
+	return sprint("maxage=%d", cfg.cachesecs);
 }
 
 accesslog(op: ref Op)
@@ -1030,9 +1155,10 @@ accesslog(op: ref Op)
 		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.h.get("host"), op.req.url.path, sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg, length, op.req.h.get("user-agent"), op.req.h.get("referer"));
 }
 
-findcgi(path: string): (string, string, int)
+findcgi(cfg: ref Cfg, path: string): (string, string, int)
 {
-	for(l := cgipaths; l != nil; l = tl l)
+	say(sprint("findcgi: len cfg.redirs %d", len cfg.redirs));
+	for(l := cfg.cgipaths; l != nil; l = tl l)
 		if(str->prefix((hd l).t0, path))
 			return hd l;
 	return (nil, nil, 0);
@@ -1446,6 +1572,14 @@ has(s: string, c: int): int
 	return 0;
 }
 
+revo(l: list of (string, string, int)): list of (string, string, int)
+{
+	r: list of (string, string, int);
+	for(; l != nil; l = tl l)
+		r = hd l::r;
+	return r;
+}
+
 rev3(l: list of (string, string, string)): list of (string, string, string)
 {
 	r: list of (string, string, string);
@@ -1478,50 +1612,6 @@ rev[T](l: list of T): list of T
 	return r;
 }
 
-orderlong0(l: list of (string, string, int)): list of (string, string, int)
-{
-	if(l == nil)
-		return nil;
-	(first, rem) := longest0(l);
-	return first::orderlong0(rem);
-}
-
-longest0(l: list of (string, string, int)): ((string, string, int), list of (string, string, int))
-{
-	r: list of (string, string, int);
-	long := hd l;
-	for(l = tl l; l != nil; l = tl l)
-		if(len (hd l).t0 > len long.t0) {
-			r = long::r;
-			long = hd l;
-		} else {
-			r = hd l::r;
-		}
-	return (long, r);
-}
-
-orderlong1(l: list of (string, string)): list of (string, string)
-{
-	if(l == nil)
-		return nil;
-	(first, rem) := longest1(l);
-	return first::orderlong1(rem);
-}
-
-longest1(l: list of (string, string)): ((string, string), list of (string, string))
-{
-	r: list of (string, string);
-	long := hd l;
-	for(l = tl l; l != nil; l = tl l)
-		if(len (hd l).t0 > len long.t0) {
-			r = long::r;
-			long = hd l;
-		} else {
-			r = hd l::r;
-		}
-	return (long, r);
-}
-
 kill(pid: int)
 {
 	fd := sys->open(sprint("/prog/%d/ctl", pid), Sys->OWRITE);
@@ -1551,4 +1641,233 @@ fail(s: string)
 {
 	fprint(fildes(2), "%s\n", s);
 	raise "fail:"+s;
+}
+
+
+Cfgs.init(file: string): (ref Cfgs, string)
+{
+	db := Db.open(file);
+	if(db == nil)
+		return (nil, sprint("db open %s: %r", file));
+	c := ref Cfgs(file, db, nil, nil, chan of (string, string, chan of (ref Cfg, string)));
+	err := cfgsread(c);
+	if(err == nil)
+		spawn cfgserver(c);
+	return (c, err);
+}
+
+Cfgs.get(c: self ref Cfgs, host, port: string): (ref Cfg, string)
+{
+	if(!vhostflag) {
+		if(c.default == nil)
+			return (nil, "no config");
+		return (c.default, nil);
+	}
+	c.getch <-= (host, port, respch := chan of (ref Cfg, string));
+	return <-respch;
+}
+
+cfgfind(c: ref Cfgs, host, port: string): ref Cfg
+{
+	say(sprint("cfgfind, have %d configs", len c.configs));
+	for(l := c.configs; l != nil; l = tl l) {
+		(chost, cport, config) := hd l;
+		say(sprint("testing against host %q port %q vs %q %q", chost, cport, host, port));
+		if(host == chost && port == cport) {
+			say("have match!");
+			return config;
+		}
+	}
+	return nil;
+}
+
+cfgserver(c: ref Cfgs)
+{
+	for(;;) {
+		(host, port, respch) := <-c.getch;
+		say(sprint("cfgserver, have request for host %q port %q", host, port));
+
+		cfg := cfgfind(c, host, port);
+		if(cfg == nil)
+			cfg = c.default;
+		if(cfg == nil)
+			respch <-= (nil, "no config");
+		else
+			respch <-= (cfg, nil);
+	}
+}
+
+cfgsread(c: ref Cfgs): string
+{
+	e: ref Dbentry; 
+	(e, nil) = c.db.find(nil, "vhost");
+	if(e != nil)
+		vhostflag = 1;
+
+	(e, nil) = c.db.find(nil, "ctlchan");
+	if(e != nil) {
+		s := e.findfirst("ctlchan");
+		if(s != nil)
+			ctlchan = s;
+	}
+
+	ptr: ref Attrdb->Dbptr;
+	attr := "mime";
+	for(;;) {
+		(e, ptr) = c.db.find(ptr, attr);
+		if(e == nil)
+			break;
+		ext := e.findfirst("ext");
+		mtype := e.findfirst("type");
+		if(ext == nil || mtype == nil)
+			return sprint("bad mime type, ext=%q type=%q", ext, mtype);
+		ntypes := array[len types+1] of (string, string);
+		ntypes[0] = (ext, mtype);
+		ntypes[1:] = types;
+		types = ntypes;
+	}
+	ptr = nil;
+
+	attr = "bind";
+	for(;;) {
+		(e, ptr) = c.db.find(ptr, attr);
+		if(e == nil)
+			break;
+		addr := e.findfirst("addr");
+		if(addr == nil)
+			say("bad listen entry, missing/empty \"addr\" field, ignoring...");
+		else
+			addrs = addr::addrs;
+	}
+	ptr = nil;
+
+	attr = "host";
+	for(;;) {
+		(e, ptr) = c.db.find(ptr, attr);
+		if(e == nil)
+			break;
+		host := e.findfirst("host");
+		port := e.findfirst("port");
+		if(port == "")
+			port = "80";
+		(cfg, err) := cfgread(e);
+		if(err != nil)
+			return err;
+		cfg.host = host;
+		cfg.port = port;
+		if(host == nil)
+			c.default = cfg;
+		c.configs = (host, port, cfg)::c.configs;
+		say(sprint("cfgsread, have host %q port %q", host, port));
+	}
+	ptr = nil;
+
+	attr = "alias";
+	for(;;) {
+		(e, ptr) = c.db.find(ptr, attr);
+		if(e == nil)
+			break;
+		host := e.findfirst("host");
+		port := e.findfirst("port");
+		usehost := e.findfirst("usehost");
+		useport := e.findfirst("useport");
+		if(port == nil)
+			port = "80";
+		if(usehost == nil)
+			usehost = host;
+		if(useport == nil)
+			useport = port;
+		if(usehost == host && useport == port)
+			return "alias line aliases host and port to itself, ignoring";
+		cfg := cfgfind(c, usehost, useport);
+		if(cfg == nil)
+			return sprint("alias references non-existing usehost=%q useport=%q", usehost, useport);
+		c.configs = (host, port, cfg)::c.configs;
+		say(sprint("cfgsread, have alias host %q port %q usehost %q useport %q", host, port, usehost, useport));
+	}
+	ptr = nil;
+
+	return nil;
+}
+
+Cfg.new(): ref Cfg
+{
+	return ref Cfg("", "80", 0, 0, nil, nil, nil, nil, nil);
+}
+
+cfgread(e: ref Dbentry): (ref Cfg, string)
+{
+	cfg := Cfg.new();
+
+	for(l := list of {"listings", "cachesecs"}; l != nil; l = tl l) {
+		for(r := e.find(hd l); r != nil; r = tl r) {
+			for(attrs := (hd r).t1; attrs != nil; attrs = tl attrs) {
+				val := (hd attrs).val;
+				case (hd attrs).attr {
+				"listings" =>	cfg.listings = 1;
+				"cachesecs" =>	cfg.cachesecs = int val;
+				* =>	say(sprint("ignoring config attribute %q", (hd attrs).attr));
+				}
+			}
+		}
+	}
+
+	for(l = list of {"listen", "redir", "auth", "index", "cgi", "scgi"}; l != nil; l = tl l) {
+		attr := hd l;
+		for(r := e.find(attr); r != nil; r = tl r) {
+			(tups, nil) := hd r;
+			
+			case attr {
+			"listen" =>
+				ip := tups.find("ip");
+				port := tups.find("port");
+				if(ip == nil)
+					return (nil, sprint("missing ip in listen line"));
+				ipstr := (hd ip).val;
+				say(sprint("ipstr %q", ipstr));
+				(ok, ipaddr) := IPaddr.parse(ipstr);
+				if(ok != 0)
+					return (nil, sprint("invalid ip address: %q", ipstr));
+				portstr := "80";
+				if(port != nil)
+					portstr = (hd port).val;
+				cfg.addrs = (ref (ipaddr.text(), string int portstr))::cfg.addrs;
+			"redir" =>
+				src := tups.find("src");
+				dst := tups.find("dst");
+				if(src == nil || dst == nil)
+					return (nil, "missing src or dst in redir line");
+				cfg.redirs = ((hd src).val, (hd dst).val)::cfg.redirs;
+			"auth" =>
+				path := tups.find("path");
+				realm := tups.find("realm");
+				user := tups.find("user");
+				pass := tups.find("pass");
+				if(path == nil || realm == nil || user == nil || pass == nil)
+					return (nil, "missing field in auth line");
+				cfg.auths = ((hd path).val, (hd realm).val, base64->enc(array of byte ((hd user).val+":"+(hd pass).val)))::cfg.auths;
+			"index" =>
+				for(file := tups.find("file"); file != nil; file = tl file)
+					cfg.indexfiles = (hd file).val::cfg.indexfiles;
+			"cgi" =>
+				path := tups.find("path");
+				cmd := tups.find("cmd");
+				if(path == nil || cmd == nil)
+					return (nil, "missing path or cmd in cgi line");
+				cfg.cgipaths = ((hd path).val, (hd cmd).val, Cgi)::cfg.cgipaths;
+			"scgi" =>
+				path := tups.find("path");
+				addr := tups.find("addr");
+				if(path == nil || addr == nil)
+					return (nil, "missing path or addr in scgi line");
+				cfg.cgipaths = ((hd path).val, (hd addr).val, Scgi)::cfg.cgipaths;
+			}
+		}
+	}
+	cfg.addrs = rev(cfg.addrs);
+	cfg.cgipaths = revo(cfg.cgipaths);
+	cfg.indexfiles = rev(cfg.indexfiles);
+	cfg.redirs = rev2(cfg.redirs);
+	cfg.auths = rev3(cfg.auths);
+	return (cfg, nil);
 }
