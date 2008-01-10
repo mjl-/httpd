@@ -480,7 +480,6 @@ ctlhandler(fio: ref Sys->FileIO)
 			s = s[:len s-1];
 		case s {
 		"reload" =>
-			say("reloading db");
 			if(cfgs.db.reopen() != 0) {
 				msg := sprint("reopening config files: %r");
 				say(msg);
@@ -584,7 +583,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(err == "no config")
 		return responderrmsg(op, Enotfound, nil);
 	if(err != nil) {
-		say("getting config: "+err);
+		chat(id, "getting config: "+err);
 		return responderrmsg(op, Eservererror, "Internal Server Error: Configuration not available");
 	}
 
@@ -593,7 +592,6 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(!addrokay) {
 		for(as := cfg.addrs; !addrokay && as != nil; as = tl as) {
 			(chost, cport) := *(hd as);
-			say(sprint("testing config host %q port %q against connection host %q port %q", chost, cport, op.lhost, op.lport));
 			addrokay = chost == op.lhost && cport == op.lport;
 		}
 	}
@@ -1177,7 +1175,6 @@ accesslog(op: ref Op)
 
 findcgi(cfg: ref Cfg, path: string): (string, string, int)
 {
-	say(sprint("findcgi: len cfg.redirs %d", len cfg.redirs));
 	for(l := cfg.cgipaths; l != nil; l = tl l)
 		if(str->prefix((*hd l).t0, path))
 			return *hd l;
@@ -1204,7 +1201,6 @@ pathsanitize(path: string): string
 	trailslash := path != nil && path[len path-1] == '/';
 
 	(nil, elems) := sys->tokenize(path, "/");
-	say(sprint("path nelems: %d", len elems));
 	r: list of string;
 	for(; elems != nil; elems = tl elems)
 		if(hd elems == ".")
@@ -1224,7 +1220,6 @@ pathsanitize(path: string): string
 
 pathurls(s: string): string
 {
-	say("pathurls: "+s);
 	(nil, l) := sys->tokenize(s, "/");
 	r := "";
 	i := 0;
@@ -1308,7 +1303,7 @@ gettype(path: string): string
 		if(suffix(types[i].t0, path))
 			return types[i].t1;
 	if(!has(path, '.'))
-		return "text/plain; charset=utf-8";
+		return "text/plain; charset=utf-8";	# for mkfile, README, etc.
 	return "application/octet-stream";
 }
 
@@ -1401,14 +1396,11 @@ parsehttpdate(s: string): int
 	(n, tokens) := sys->tokenize(s, " ");
 	if(n != 6 || len hd tokens != 4 || (hd tokens)[3] != ',' || index(days, (hd tokens)[:3]) < 0)
 		return 0;
-	say("got a bit");
 	if((mon = index(months, hd tl tl tokens)) < 0)
 		return 0;
-	say("got a month");
 	(hn, htokens) := sys->tokenize(hd tl tl tl tl tokens, ":");
 	if(hn != 3)
 		return 0;
-	say("got time");
 	mday = int hd tl tokens;
 	year = int hd tl tl tl tokens;
 	hour = int hd htokens;
@@ -1657,14 +1649,10 @@ Cfgs.get(c: self ref Cfgs, host, port: string): (ref Cfg, string)
 
 cfgfind(c: ref Cfgs, host, port: string): ref Cfg
 {
-	say(sprint("cfgfind, have %d configs", len c.configs));
 	for(l := c.configs; l != nil; l = tl l) {
 		(chost, cport, config) := hd l;
-		say(sprint("testing against host %q port %q vs %q %q", chost, cport, host, port));
-		if(host == chost && port == cport) {
-			say("have match!");
+		if(host == chost && port == cport)
 			return config;
-		}
 	}
 	return nil;
 }
@@ -1673,7 +1661,6 @@ cfgserver(c: ref Cfgs)
 {
 	for(;;) {
 		(host, port, respch) := <-c.getch;
-		say(sprint("cfgserver, have request for host %q port %q", host, port));
 
 		cfg := cfgfind(c, host, port);
 		if(cfg == nil)
@@ -1746,7 +1733,6 @@ cfgsread(c: ref Cfgs): string
 		if(host == nil)
 			c.default = cfg;
 		c.configs = (host, port, cfg)::c.configs;
-		say(sprint("cfgsread, have host %q port %q", host, port));
 	}
 	ptr = nil;
 
@@ -1771,7 +1757,6 @@ cfgsread(c: ref Cfgs): string
 		if(cfg == nil)
 			return sprint("alias references non-existing usehost=%q useport=%q", usehost, useport);
 		c.configs = (host, port, cfg)::c.configs;
-		say(sprint("cfgsread, have alias host %q port %q usehost %q useport %q", host, port, usehost, useport));
 	}
 	ptr = nil;
 
@@ -1821,7 +1806,6 @@ cfgread(e: ref Dbentry): (ref Cfg, string)
 				if(ip == nil)
 					return (nil, sprint("missing ip in listen line"));
 				ipstr := (hd ip).val;
-				say(sprint("ipstr %q", ipstr));
 				(ok, ipaddr) := IPaddr.parse(ipstr);
 				if(ok != 0)
 					return (nil, sprint("invalid ip address: %q", ipstr));
