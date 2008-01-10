@@ -76,6 +76,7 @@ Cfg: adt {
 	auths:	list of ref (string, string, string);	# path, realm, base64 user:pass
 
 	new:	fn(): ref Cfg;
+	rev:	fn(cfg: self ref Cfg);
 };
 
 cfgs: ref Cfgs;
@@ -261,11 +262,7 @@ init(nil: ref Draw->Context, args: list of string)
 				fprint(fildes(2), "reading %q: %s\n", file, err);
 				raise "fail:usage";
 			}
-			defcfg.addrs = rev(defcfg.addrs);
-			defcfg.cgipaths = rev(defcfg.cgipaths);
-			defcfg.indexfiles = rev(defcfg.indexfiles);
-			defcfg.redirs = rev(defcfg.redirs);
-			defcfg.auths = rev(defcfg.auths);
+			defcfg.rev();
 		'r' =>
 			(restr, rulestr) := (arg->earg(), arg->earg());
 			(repl, rerr) := Repl.parse(restr, rulestr);
@@ -286,11 +283,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(len args != 1)
 		arg->usage();
 	webroot = hd args;
-	defcfg.addrs = rev(defcfg.addrs);
-	defcfg.cgipaths = rev(defcfg.cgipaths);
-	defcfg.indexfiles = rev(defcfg.indexfiles);
-	defcfg.redirs = rev(defcfg.redirs);
-	defcfg.auths = rev(defcfg.auths);
+	defcfg.rev();
 	credempty = base64->enc(array of byte ":");
 
 	environment = env->getall();
@@ -1790,6 +1783,15 @@ Cfg.new(): ref Cfg
 	return ref Cfg("", "80", 0, 0, nil, nil, nil, nil, nil);
 }
 
+Cfg.rev(cfg: self ref Cfg)
+{
+	cfg.addrs = rev(cfg.addrs);
+	cfg.cgipaths = rev(cfg.cgipaths);
+	cfg.indexfiles = rev(cfg.indexfiles);
+	cfg.redirs = rev(cfg.redirs);
+	cfg.auths = rev(cfg.auths);
+}
+
 cfgread(e: ref Dbentry): (ref Cfg, string)
 {
 	cfg := Cfg.new();
@@ -1862,11 +1864,7 @@ cfgread(e: ref Dbentry): (ref Cfg, string)
 			}
 		}
 	}
-	cfg.addrs = rev(cfg.addrs);
-	cfg.cgipaths = rev(cfg.cgipaths);
-	cfg.indexfiles = rev(cfg.indexfiles);
-	cfg.redirs = rev(cfg.redirs);
-	cfg.auths = rev(cfg.auths);
+	cfg.rev();
 	return (cfg, nil);
 }
 

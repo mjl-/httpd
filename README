@@ -22,7 +22,6 @@ testing:
 - redirects based on path rewriting?
 
 todo:
-- fix the ugly reversing of config elements at startup?
 - run as unprivileged user
 - better messages in errorlog
 - write events to error log:  started, reloaded
