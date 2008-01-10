@@ -144,6 +144,7 @@ types := array[] of {
 	(".tex",	"text/plain; charset=utf-8"),
 	(".mp4",	"video/mp4"),
 	(".mpg",	"video/mpeg"),
+	(".mpeg",	"video/mpeg"),
 	(".ms",		"text/plain; charset=utf-8"),
 	(".roff",	"text/plain; charset=utf-8"),
 	(".man",	"text/plain; charset=utf-8"),
@@ -154,8 +155,15 @@ types := array[] of {
 	(".doc",	"application/msword"),
 	(".ico",	"image/x-icon"),
 	(".bmp",	"image/bmp"),
+	(".tex",	"text/plain; charset=utf-8"),
 	(".xls",	"application/vnd.ms-excel"),
 	(".ppt",	"application/vnd.ms-powerpoint"),
+	(".tar.bz2",	"application/x-bzip-compressed-tar"),
+	(".bz2",	"application/x-bzip"),
+	(".tbz",	"application/x-bzip-compressed-tar"),
+	(".zip",	"application/zip"),
+	(".wav",	"audio/x-wav"),
+	(".jpeg",	"image/jpeg"),
 };
 
 Eok:			con 200;
