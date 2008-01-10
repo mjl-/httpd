@@ -8,9 +8,9 @@ features:
 - error/access logging
 - index file serving, html directory listings
 - http basic authentication
-- redirections
+- redirections with regular expressions
 
-todo:
+testing:
 - better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
 	- aliases for host/port configs
 	- verify local ip is in allowed list for request
@@ -19,10 +19,11 @@ todo:
 	- config reloading.  on explicit request only?  over file2chan thing
 	- make sure command-line options make sense now (work)
 	- do all changeable config options work after reload?
+- redirects based on path rewriting?
 
+todo:
 - fix the ugly reversing of config elements at startup?
 - run as unprivileged user
-- redirects based on path rewriting?
 - better messages in errorlog
 - write events to error log:  started, reloaded
 - write man page

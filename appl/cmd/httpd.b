@@ -16,6 +16,7 @@ include "encoding.m";
 include "sh.m";
 include "ip.m";
 include "attrdb.m";
+include "regex.m";
 include "mhttp.m";
 
 sys: Sys;
@@ -29,6 +30,7 @@ base64: Encoding;
 sh: Sh;
 ipm: IP;
 attrdb: Attrdb;
+regex: Regex;
 http: Http;
 
 print, sprint, fprint, fildes: import sys;
@@ -37,8 +39,19 @@ OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, CONNECT: import http;
 prefix: import str;
 IPaddr: import ipm;
 Db, Dbentry, Tuples: import attrdb;
+Re: import regex;
 
 Version: con "nhttpd/0";
+
+
+Repl: adt {
+	re:	Re;
+	rule:	list of ref (string, int);	# string, replacement index for regex
+	maxrepl:	int;	# highest index for replacement
+
+	parse:	fn(restr, rulestr: string): (ref Repl, string);
+	apply:	fn(r: self ref Repl, s: string): (int, string, string);
+};
 
 # configs, one cfg per host/port pair
 Cfgs: adt {
@@ -57,15 +70,16 @@ Cfg: adt {
 	host, port:	string;
 	listings, cachesecs:	int;
 	addrs:	list of ref (string, string);	# ip, port
-	cgipaths:	list of (string, string, int);	# path, cmd|addr, cgi|scgi
+	cgipaths:	list of ref (string, string, int);	# path, cmd|addr, cgi|scgi
 	indexfiles:	list of string;
-	redirs:	list of (string, string);	# srcpath, destpath
-	auths:	list of (string, string, string);	# path, realm, base64 user:pass
+	redirs:	list of ref Repl;
+	auths:	list of ref (string, string, string);	# path, realm, base64 user:pass
 
 	new:	fn(): ref Cfg;
 };
 
 cfgs: ref Cfgs;
+
 
 # represents a connection and a request on it
 Op: adt {
@@ -218,6 +232,7 @@ init(nil: ref Draw->Context, args: list of string)
 	err := attrdb->init();
 	if(err != nil)
 		fail("loading attrdb: "+err);
+	regex = load Regex Regex->PATH;
 	http = load Http Http->PATH;
 	http->init(bufio);
 
@@ -230,10 +245,10 @@ init(nil: ref Draw->Context, args: list of string)
 	arg->setusage(arg->progname()+" [-dhl] [-A path realm user:pass] [-C cachesecs] [-a addr] [-c path command] [-f chanfile] [-i indexfile] [-n config] [-r orig new] [-s path addr] [-t extention mimetype] webroot");
 	while((c := arg->opt()) != 0)
 		case c {
-		'A' =>	defcfg.auths = (arg->earg(), arg->earg(), base64->enc(array of byte arg->earg()))::defcfg.auths;
+		'A' =>	defcfg.auths = ref (arg->earg(), arg->earg(), base64->enc(array of byte arg->earg()))::defcfg.auths;
 		'C' =>	defcfg.cachesecs = int arg->earg();
 		'a' =>	addrs = arg->earg()::addrs;
-		'c' =>	defcfg.cgipaths = (arg->earg(), arg->earg(), Cgi)::defcfg.cgipaths;
+		'c' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), Cgi)::defcfg.cgipaths;
 		'd' =>	debugflag++;
 		'f' =>	ctlchan = arg->earg();
 		'h' =>	vhostflag++;
@@ -247,12 +262,19 @@ init(nil: ref Draw->Context, args: list of string)
 				raise "fail:usage";
 			}
 			defcfg.addrs = rev(defcfg.addrs);
-			defcfg.cgipaths = revo(defcfg.cgipaths);
+			defcfg.cgipaths = rev(defcfg.cgipaths);
 			defcfg.indexfiles = rev(defcfg.indexfiles);
-			defcfg.redirs = rev2(defcfg.redirs);
-			defcfg.auths = rev3(defcfg.auths);
-		'r' =>	defcfg.redirs = (arg->earg(), arg->earg())::defcfg.redirs;
-		's' =>	defcfg.cgipaths = (arg->earg(), arg->earg(), Scgi)::defcfg.cgipaths;
+			defcfg.redirs = rev(defcfg.redirs);
+			defcfg.auths = rev(defcfg.auths);
+		'r' =>
+			(restr, rulestr) := (arg->earg(), arg->earg());
+			(repl, rerr) := Repl.parse(restr, rulestr);
+			if(err != nil) {
+				fprint(fildes(2), "parsing redir %q %q: %s\n", restr, rulestr, rerr);
+				raise "fail:usage";
+			}
+			defcfg.redirs = repl::defcfg.redirs;
+		's' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), Scgi)::defcfg.cgipaths;
 		't' =>	(extension, mimetype) := (arg->earg(), arg->earg());
 			ntypes := array[len types+1] of (string, string);
 			ntypes[0] = (extension, mimetype);
@@ -265,10 +287,10 @@ init(nil: ref Draw->Context, args: list of string)
 		arg->usage();
 	webroot = hd args;
 	defcfg.addrs = rev(defcfg.addrs);
-	defcfg.cgipaths = revo(defcfg.cgipaths);
+	defcfg.cgipaths = rev(defcfg.cgipaths);
 	defcfg.indexfiles = rev(defcfg.indexfiles);
-	defcfg.redirs = rev2(defcfg.redirs);
-	defcfg.auths = rev3(defcfg.auths);
+	defcfg.redirs = rev(defcfg.redirs);
+	defcfg.auths = rev(defcfg.auths);
 	credempty = base64->enc(array of byte ":");
 
 	environment = env->getall();
@@ -642,7 +664,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(str->tolower(which) != "basic ")
 		cred = nil;
 	for(a := cfg.auths; !haveauth && a != nil; a = tl a) {
-		(apath, arealm, acred) := hd a;
+		(apath, arealm, acred) := *hd a;
 		if(prefix(apath, path)) {
 			needauth = 1;
 			realm = arealm;
@@ -659,12 +681,17 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	}
 
 	for(r := cfg.redirs; r != nil; r = tl r) {
-		(orig, new) := hd r;
-		if(orig == path) {
-			resp.h.set("location", new);
-			new = htmlescape(new);
-			return responderrmsg(op, Emovedpermanently, sprint("Moved Permanently: moved to <a href=\"%s\">%s</a>", new, new));
+		repl := hd r;
+		(match, dest, replerr) := repl.apply(path);
+		if(replerr != nil) {
+			chat(id, "redirections misconfiguration: "+replerr);
+			return responderrmsg(op, Eservererror, "An error occurred while handling a redirection");
 		}
+		if(!match)
+			continue;
+		resp.h.set("location", dest);	# xxx return absolute url?
+		dest = htmlescape(dest);
+		return responderrmsg(op, Emovedpermanently, sprint("Moved Permanently: moved to <a href=\"%s\">%s</a>", dest, dest));
 	}
 
 	# if path is cgi-handled, let cgi() handle the request
@@ -763,7 +790,7 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 	                     || ifrange[0] == '"' && tag == ifrange
 	                     || dir.mtime <= parsehttpdate(ifrange))) {
 		if(len ranges == 1) {
-			(start, end) := hd ranges;
+			(start, end) := *hd ranges;
 			resp.h.add("content-range", sprint("bytes %bd-%bd/%bd", start, end-big 1, dir.length));
 		} else {
 			bound = sha1(array of byte (string <-randch+","+string op.now));
@@ -773,7 +800,7 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 		resp.st = "206";
 		resp.stmsg = "partial content";
 	} else
-		ranges = (big 0, dir.length)::nil;
+		ranges = ref (big 0, dir.length)::nil;
 
 	accesslog(op);
 
@@ -785,7 +812,7 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 		return;
 
 	for(; ranges != nil; ranges = tl ranges) {
-		(off, end) := hd ranges;
+		(off, end) := *hd ranges;
 		if(bound != nil)
 			hwrite(op, array of byte sprint("--%s\r\ncontent-type: %s\r\ncontent-range: bytes %bd-%bd/%bd\r\n\r\n", bound, ct, off, end-big 1, dir.length));
 		while(off < end) {
@@ -1159,8 +1186,8 @@ findcgi(cfg: ref Cfg, path: string): (string, string, int)
 {
 	say(sprint("findcgi: len cfg.redirs %d", len cfg.redirs));
 	for(l := cfg.cgipaths; l != nil; l = tl l)
-		if(str->prefix((hd l).t0, path))
-			return hd l;
+		if(str->prefix((*hd l).t0, path))
+			return *hd l;
 	return (nil, nil, 0);
 }
 
@@ -1399,7 +1426,7 @@ parsehttpdate(s: string): int
 	return daytime->tm2epoch(ref Daytime->Tm(sec, min, hour, mday, mon, year-1900, 0, 0, s[1:], 0));
 }
 
-parserange(version: int, range: string, dir: Sys->Dir): (int, list of (big, big))
+parserange(version: int, range: string, dir: Sys->Dir): (int, list of ref (big, big))
 {
 	if(range == nil || !(version >= HTTP_11))
 		return (1, nil);
@@ -1412,7 +1439,7 @@ parserange(version: int, range: string, dir: Sys->Dir): (int, list of (big, big)
 		return (0, nil);
 	range = str->drop(range[1:], " \t");
 
-	r: list of (big, big);
+	r: list of ref (big, big);
 	valid := 0;
 	for(l := sys->tokenize(range, ",").t1; l != nil; l = tl l) {
 		s := strip(hd l, " \t");
@@ -1431,7 +1458,7 @@ parserange(version: int, range: string, dir: Sys->Dir): (int, list of (big, big)
 			if(i >= dir.length)
 				i = dir.length - big 1;
 			chat(0, sprint("adding single, (%bd, %bd)", i, dir.length));
-			r = (i, dir.length)::r;
+			r = ref (i, dir.length)::r;
 		} else {
 			(first, last) := str->splitstrl(s, "-");
 			if(stripws(str->drop(first, "0-9")) != nil || last == nil || str->drop(stripws(last[1:]), "0-9") != nil)
@@ -1447,11 +1474,11 @@ parserange(version: int, range: string, dir: Sys->Dir): (int, list of (big, big)
 				return (1, nil);
 			if(f < dir.length)
 				valid = 1;
-			r = (f, e)::r;
+			r = ref (f, e)::r;
 			chat(0, sprint("adding two, (%bd, %bd)", f, e));
 		}
 	}
-	return (valid, rev1(r));
+	return (valid, rev(r));
 }
 
 etagmatch(version: int, etag: string, etagstr: string, strong: int): int
@@ -1570,38 +1597,6 @@ has(s: string, c: int): int
 		if(s[i] == c)
 			return 1;
 	return 0;
-}
-
-revo(l: list of (string, string, int)): list of (string, string, int)
-{
-	r: list of (string, string, int);
-	for(; l != nil; l = tl l)
-		r = hd l::r;
-	return r;
-}
-
-rev3(l: list of (string, string, string)): list of (string, string, string)
-{
-	r: list of (string, string, string);
-	for(; l != nil; l = tl l)
-		r = hd l::r;
-	return r;
-}
-
-rev2(l: list of (string, string)): list of (string, string)
-{
-	r: list of (string, string);
-	for(; l != nil; l = tl l)
-		r = hd l::r;
-	return r;
-}
-
-rev1(l: list of (big, big)): list of (big, big)
-{
-	r: list of (big, big);
-	for(; l != nil; l = tl l)
-		r = hd l::r;
-	return r;
 }
 
 rev[T](l: list of T): list of T
@@ -1837,7 +1832,10 @@ cfgread(e: ref Dbentry): (ref Cfg, string)
 				dst := tups.find("dst");
 				if(src == nil || dst == nil)
 					return (nil, "missing src or dst in redir line");
-				cfg.redirs = ((hd src).val, (hd dst).val)::cfg.redirs;
+				(repl, rerr) := Repl.parse((hd src).val, (hd dst).val);
+				if(rerr != nil)
+					return (nil, "parsing redir: "+rerr);
+				cfg.redirs = repl::cfg.redirs;
 			"auth" =>
 				path := tups.find("path");
 				realm := tups.find("realm");
@@ -1845,7 +1843,7 @@ cfgread(e: ref Dbentry): (ref Cfg, string)
 				pass := tups.find("pass");
 				if(path == nil || realm == nil || user == nil || pass == nil)
 					return (nil, "missing field in auth line");
-				cfg.auths = ((hd path).val, (hd realm).val, base64->enc(array of byte ((hd user).val+":"+(hd pass).val)))::cfg.auths;
+				cfg.auths = ref ((hd path).val, (hd realm).val, base64->enc(array of byte ((hd user).val+":"+(hd pass).val)))::cfg.auths;
 			"index" =>
 				for(file := tups.find("file"); file != nil; file = tl file)
 					cfg.indexfiles = (hd file).val::cfg.indexfiles;
@@ -1854,20 +1852,76 @@ cfgread(e: ref Dbentry): (ref Cfg, string)
 				cmd := tups.find("cmd");
 				if(path == nil || cmd == nil)
 					return (nil, "missing path or cmd in cgi line");
-				cfg.cgipaths = ((hd path).val, (hd cmd).val, Cgi)::cfg.cgipaths;
+				cfg.cgipaths = ref ((hd path).val, (hd cmd).val, Cgi)::cfg.cgipaths;
 			"scgi" =>
 				path := tups.find("path");
 				addr := tups.find("addr");
 				if(path == nil || addr == nil)
 					return (nil, "missing path or addr in scgi line");
-				cfg.cgipaths = ((hd path).val, (hd addr).val, Scgi)::cfg.cgipaths;
+				cfg.cgipaths = ref ((hd path).val, (hd addr).val, Scgi)::cfg.cgipaths;
 			}
 		}
 	}
 	cfg.addrs = rev(cfg.addrs);
-	cfg.cgipaths = revo(cfg.cgipaths);
+	cfg.cgipaths = rev(cfg.cgipaths);
 	cfg.indexfiles = rev(cfg.indexfiles);
-	cfg.redirs = rev2(cfg.redirs);
-	cfg.auths = rev3(cfg.auths);
+	cfg.redirs = rev(cfg.redirs);
+	cfg.auths = rev(cfg.auths);
 	return (cfg, nil);
+}
+
+
+Repl.parse(restr, rulestr: string): (ref Repl, string)
+{
+	(re, err) := regex->compile(restr, 1);
+	if(err != nil)
+		return (nil, "bad regex: "+err);
+
+	rule: list of ref (string, int);
+	maxrepl := 0;
+	for(;;) {
+		(l, r) := str->splitstrl(rulestr, "$");
+		if(r == nil) {
+			rule = ref (l, -1)::rule;
+			break;
+		}
+		r = r[1:];
+		if(r != nil && r[0] == '$') {
+			rule = ref (l+"$", -1)::rule;
+			r = r[1:];
+		} else {
+			num := str->take(r, "0-9");
+			if(num == nil)
+				return (nil, "bad rule: $ not followed by number or dollar");
+			n := int num;
+			if(n > maxrepl)
+				maxrepl = n;
+			rule = ref (l, n)::rule;
+			r = r[len num:];
+		}
+		rulestr = r;
+	}
+	rule = rev(rule);
+	return (ref Repl(re, rule, maxrepl), nil);
+}
+
+Repl.apply(r: self ref Repl, s: string): (int, string, string)
+{
+	m := regex->executese(r.re, s, (0, len s), 1, 1);
+	if(m == nil)
+		return (0, nil, nil);
+	if(r.maxrepl > len m-1)
+		return (0, nil, "replacement group too high for regular expression");
+	res := "";
+	for(rl := r.rule; rl != nil; rl = tl rl) {
+		(part, index) := *(hd rl);
+		res += part;
+		if(index == -1)
+			continue;
+		(b, e) := m[index];
+		if(b == -1 || e == -1)
+			return (0, nil, "replacement group did not match in regular expression");
+		res += s[b:e];
+	}
+	return (1, res, nil);
 }
