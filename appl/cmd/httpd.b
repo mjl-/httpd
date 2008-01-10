@@ -119,6 +119,7 @@ types := array[] of {
 	(".diff",	"text/plain; charset=utf-8"),
 	(".patch",	"text/plain; charset=utf-8"),
 	(".ps",		"application/postscript"),
+	(".eps",	"application/postscript"),
 	(".torrent",	"application/x-bittorrent"),
 	(".dvi",	"application/x-dvi"),
 	(".tar.gz",	"application/x-tgz"),
@@ -147,9 +148,14 @@ types := array[] of {
 	(".roff",	"text/plain; charset=utf-8"),
 	(".man",	"text/plain; charset=utf-8"),
 	(".me",		"text/plain; charset=utf-8"),
+	(".t",		"text/plain; charset=utf-8"),
 	(".tif",	"image/tiff"),
 	(".tiff",	"image/tiff"),
-	(".bin",	"application/octet-stream"),
+	(".doc",	"application/msword"),
+	(".ico",	"image/x-icon"),
+	(".bmp",	"image/bmp"),
+	(".xls",	"application/vnd.ms-excel"),
+	(".ppt",	"application/vnd.ms-powerpoint"),
 };
 
 Eok:			con 200;
