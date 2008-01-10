@@ -22,10 +22,10 @@ testing:
 - redirects based on path rewriting?
 
 todo:
+- allow multiple credentials to be specified for a single path?
 - run as unprivileged user
 - better messages in errorlog
 - write events to error log:  started, reloaded
-- write man page
 
 - split config loading in separate module?
 - do hostname lookups for config "listen"?  instead of just ips

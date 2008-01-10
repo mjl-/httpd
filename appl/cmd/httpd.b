@@ -264,7 +264,7 @@ init(nil: ref Draw->Context, args: list of string)
 	defcfg := cfgs.default = Cfg.new();
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-dhl] [-A path realm user:pass] [-C cachesecs] [-a addr] [-c path command] [-f chanfile] [-i indexfile] [-n config] [-r orig new] [-s path addr] [-t extention mimetype] webroot");
+	arg->setusage(arg->progname()+" [-dhl] [-A path realm user:pass] [-C cachesecs] [-a addr] [-c path command] [-f ctlchan] [-i indexfile] [-n config] [-r pathre dest] [-s path addr] [-t extension mimetype] webroot");
 	while((c := arg->opt()) != 0)
 		case c {
 		'A' =>	defcfg.auths = ref (arg->earg(), arg->earg(), base64->enc(array of byte arg->earg()))::defcfg.auths;
@@ -1699,6 +1699,16 @@ cfgsread(c: ref Cfgs): string
 	(e, nil) = c.db.find(nil, "vhost");
 	if(e != nil)
 		vhostflag = 1;
+	(e, nil) = c.db.find(nil, "novhost");
+	if(e != nil)
+		vhostflag = 0;
+
+	(e, nil) = c.db.find(nil, "debug");
+	if(e != nil)
+		debugflag = 1;
+	(e, nil) = c.db.find(nil, "nodebug");
+	if(e != nil)
+		debugflag = 0;
 
 	(e, nil) = c.db.find(nil, "ctlchan");
 	if(e != nil) {

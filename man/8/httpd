@@ -1,0 +1,319 @@
+.TH HTTPD 8
+.SH NAME
+httpd \- HTTP server
+.SH SYNOPSIS
+.B httpd
+[
+.B -dhl
+] [
+.B -A
+.I path realm user:pass
+] [
+.B -C
+.I cachesecs
+] [
+.B -a
+.I addr
+] [
+.B -c
+.I path command
+] [
+.B -f
+.I ctlchan
+] [
+.B -i
+.I indexfile
+] [
+.B -n
+.I config
+] [
+.B -r
+.I pathre dest
+] [
+.B -s
+.I path addr
+] [
+.B -t
+.I extension mimetype
+]
+.I webroot
+.SH DESCRIPTION
+.I Httpd
+is a HTTP server that supports most of the reasonable features of contemporary http servers.  These features include:
+
+.PP
+.EX
+	* http/1.0 and http/1.1 support
+	* cgi and scgi support
+	* directory listings
+	* index file serving
+	* redirections based on regular expressions
+	* virtual hosting (many host names on a single ip address)
+	* determining mimetype based on file extension
+	* access and error logging
+	* configuration in attrdb format
+	* as compliant as possible, where reasonable
+.EE
+
+.PP
+.I Httpd
+normally serves files from
+.IR webroot .
+The options, described below, turn on the features just listed.  The options can be used to fully configure
+.IR httpd ,
+except virtual hosting.  When using virtual hosting, the configuration file must be used and the command-line options will only apply to the "default" hostname (i.e. anyone besides the once explicitly configured) and are thus discouraged.  The configuration file, specified using
+.BI -n " config"
+is in
+.I attrdb(6)
+format.  It is only read at startup and at explicit request, so a new file will not immediately change the behaviour of
+.IR httpd .
+The attributes are described below, with their corresponding command-line options.  An example configuration file:
+
+.PP
+.EX
+debug
+#nodebug
+vhost
+#novhost
+
+ctlchan=httpd
+
+bind    addr=tcp!www.ueber.net!80
+
+mime    ext=.text       type='text/plain; charset=utf-8'
+mime    ext=.mov        type='video/quicktime'
+mime    ext=.erl        type='text/plain; charset=utf-8'
+
+host=www.ueber.net port=80
+        listings
+        cachesecs=60
+        index   file=index.html file=index.htm file=index.txt
+        redir   src='^/oldfile$'        dst=/newfile
+        redir   src='^/oldpath/(.*)$'   dst=/newpath/$1
+        scgi    path=/scgi/test         addr=net!localhost!4000
+        cgi     path=/cgi/env           cmd='{load std; echo Status: 200 OK; echo content-type: text/plain; echo; cd /env && for(i in *) { echo $i''=''`{cat $i}}}'
+        auth    path=/secret   realm='secret place'    user=username pass=password
+
+alias   
+        host=ueber.net port=80 usehost=www.ueber.net useport=80
+.EE
+
+.PP
+Now for the options and their configuration file equivalents:
+.PP
+.TP
+.B -d
+Enable debugging.  This writes debug messages to standard error while handling requests.  It also writes the messages to the error log,
+.IR /services/logs/httpderror .
+.TP
+.B -h
+Serve multiple domains, known as "virtual hosting".  The "host"-header in the request (for http/1.1-only) is used to differentiate hosts.  If enabled, connections for
+.I host
+on a given TCP
+.I port
+are served from directory
+.IR webroot/host:port .
+Files in
+.I webroot are never served directly.
+The configuration file attribute to enable this is
+.IR vhost ,
+it can be disabled explicitly with
+.I novhost
+(useful for reloading the configuration file).
+Virtual hosts can only be specified in the configuration file.  A
+.I host
+entry starts a configuration for a domain, attribute
+.I port
+is optional and defaults to 80.
+The value for
+.I host
+may be the empty string.  In this case the configuration will serve as default configuration, when no other host configuration matches an incoming request.
+Most of the other options are per-hostname, i.e. not global.
+A configuration can be aliases by using the
+.I alias
+attribute, the new
+.I host
+and
+.IR port ,
+and the host and port of from which the config should be used,
+.I usehost
+and
+.IR useport .
+The ports may be omitted and will default to 80.
+.TP
+.B -l
+Show a listing of contents for directories in html.  Contents are only listed when no index file has been found, as specified with
+.BR -i .
+The per-host configuration attribute is
+.I listings
+and does not need a value.
+.TP
+.BI -A " path realm user:pass"
+Require authorization for
+.IR path .
+The match on
+.I path
+is a prefix-match, all longer paths will require the same credentials.  Note that the path does not have to end with a slash.
+xxx can multiple user:passes be specified for a single path?  should be
+The per-host configuration attribute is
+.I auth
+(which should be the empty string).
+.I Realm
+specifies the realm,
+.I user
+the user name and
+.I pass
+the password.
+.TP
+.BI -C " cachesecs"
+Add header to allow clients to keep the response in their cache for
+.I cachesecs
+seconds.  This only applies to static content (i.e. file serving and directory listings, not cgi and scgi handlers).
+The per-host configuration attribute is
+.IR cachesecs .
+.TP
+.BI -a " address"
+Bind to
+.IR address.
+The address is directly used in a call to
+.IR sys-announce .
+.TP
+.BI -c " path command"
+Handle requests for
+.I path
+by executing
+.IR command .
+The normal CGI/1.1 rules apply for
+.IR command .
+.I Path
+is prefix-matched and does not have to end with a slash.
+.I command is executed using
+.IR sh (2).
+The per-host configuration attribute is
+.I cgi
+(which should be empty).
+.I Path
+specifies the host,
+.I cmd
+the command.
+.TP
+.BI -f " ctlchan"
+Create a file2chan control file in
+.I /chan
+by the name of
+.IR ctlchan .
+Currently, only the command "reload" is accepted.  It reloads the configuration file currently in use.  Reads on the file will fail.
+This is a global configuration file option, the corresponding attribute is
+.IR ctlchan .
+Only a single control file can be registered.
+.TP
+.BI -i " indexfile"
+Make
+.I httpd
+search for the file named
+.I indexfile
+when a directory is requested and return that instead.  This is commonly used to serve files named
+.IR index.html .
+Multiple file names can be specified, each will be tried in turn until a match is found.
+The per-host configuration attribute is
+.I index
+(which sould be empty).
+Multiple attributes
+.I file
+can be specified, each being handled as
+.B -i
+.IR indexfile .
+.TP
+.BI -n " config"
+The name of the configuraton file, in
+.IR attrdb (6)
+format.
+There is no default configuration file.  The command-line options can be used for simple configurations.
+Since command-line options are handled in the order specified and
+.I -n
+overrides the current configuration, command-line options specified before
+.I -n
+are effectively ignored.  Options specified after
+.I -n
+are used for the "default" host.
+There is no equivalent for the configuration file.
+.TP
+.BI -r " pathre dest"
+Redirect requests to regular expression
+.I pathre
+to
+.I dest
+with a HTTP "301 Moved Permanently" response.
+.I pathre
+can be contain groups, specified with ()'s as per
+.IR regex (6)
+syntax.  Occurrences of $0, $1, etc. in 
+.I dest
+are replaced by the corresponding group in
+.IR pathre .
+Group ``$0'' is the entire match and ``$1'' the first match.
+For
+.IR pathre ,
+``^'' means beginning of path and ``$'' means end of path.
+The per-host configuration attribute is
+.I redir
+(which should be empty).
+.I Src
+is the equivalent of
+.IR pathre ,
+.I dst
+is the equivalent of
+.IR dest .
+.TP
+.BI -s " path addr"
+Handle requests for
+.I path
+by passing the requests to the SCGI handler at
+.IR addr .
+.I Path
+is prefix-matched and need not end with a slash.
+The per-host configuration attribute is
+.I scgi
+(which should be empty).
+.I Path
+specifies the path,
+.I addr
+the address.
+.TP
+.BI -t " extension mimetype"
+Registers extension (which is suffix-matched and thus should usually include a dot) as being of
+.IR mimetype .
+For each request that returns a static file, the mimetype to be returned is lookup up in the types specified by
+.IR -t ,
+followed by a lookup in a compiled-in list of types when no match was found.
+The global configuration attribute is
+.I mime
+(which should be empty).
+.I Ext
+specifies the extension,
+.I type
+the mimetype.
+
+.PP
+There is one last per-host configuration attribute that cannot be specified on the command-line:
+.I listen
+(which should be empty).
+On the same line,
+.I ip
+should be present and
+.I port
+may be present (it defaults to 80).
+If virtual hosts are enabled, the local address is checked for each request.  If at least one address has been specified and the local address is not present in the addresses list of the per-host configuration for the request, a "404 Object Not Found" is returned.
+.SH SOURCE
+.B /appl/cmd/httpd.b
+.SH SEE ALSO
+.IR attrdb (6),
+.IR regex (6)
+.PP
+SCGI protocol: http://python.ca/scgi/protocol.txt
+.SH BUGS
+Attrdb was not designed for configuration file use.  The per-host configuration attributes can not be nicely grouped as top-level entries can.
+.PP
+Mention HTTP specification inconsistencies and why some requirements are not adhered to.
+.PP
+See README.
