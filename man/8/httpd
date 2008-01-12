@@ -78,13 +78,13 @@ vhost
 
 ctlchan=httpd
 
-announce=tcp!www.ueber.net!80
+announce=tcp!www.example.com!80
 
 mime    ext=.text       type='text/plain; charset=utf-8'
 mime    ext=.mov        type='video/quicktime'
 mime    ext=.erl        type='text/plain; charset=utf-8'
 
-host=www.ueber.net port=80
+host=www.example.com port=80
         listings
         cachesecs=60
         index   file=index.html file=index.htm file=index.txt
@@ -95,7 +95,7 @@ host=www.ueber.net port=80
         auth    path=/secret   realm='secret place'    user=username pass=password
 
 alias   
-        host=ueber.net port=80 usehost=www.ueber.net useport=80
+        host=example.com port=80 usehost=www.example.com useport=80
 .EE
 
 .PP
