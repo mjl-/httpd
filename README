@@ -26,6 +26,7 @@ todo:
 - run as unprivileged user
 - better messages in errorlog
 - write events to error log:  started, reloaded
+- read through code and mention important semantics in manual page
 
 - split config loading in separate module?
 - do hostname lookups for config "listen"?  instead of just ips

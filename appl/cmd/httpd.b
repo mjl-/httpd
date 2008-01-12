@@ -1734,16 +1734,12 @@ cfgsread(c: ref Cfgs): string
 	}
 	ptr = nil;
 
-	attr = "bind";
+	attr = "announce";
 	for(;;) {
 		(e, ptr) = c.db.find(ptr, attr);
 		if(e == nil)
 			break;
-		addr := e.findfirst("addr");
-		if(addr == nil)
-			say("bad listen entry, missing/empty \"addr\" field, ignoring...");
-		else
-			addrs = addr::addrs;
+		addrs = e.findfirst("announce")::addrs;
 	}
 	ptr = nil;
 

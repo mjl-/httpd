@@ -78,7 +78,7 @@ vhost
 
 ctlchan=httpd
 
-bind    addr=tcp!www.ueber.net!80
+announce=tcp!www.ueber.net!80
 
 mime    ext=.text       type='text/plain; charset=utf-8'
 mime    ext=.mov        type='video/quicktime'
@@ -173,10 +173,12 @@ The per-host configuration attribute is
 .IR cachesecs .
 .TP
 .BI -a " address"
-Bind to
-.IR address.
-The address is directly used in a call to
-.IR sys-announce .
+Announce to
+.I address
+and listen for incoming connection.
+The global configuration attribute is
+.IR announce ,
+the value is the address to listen on.
 .TP
 .BI -c " path command"
 Handle requests for
