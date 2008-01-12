@@ -22,19 +22,14 @@ testing:
 - redirects based on path rewriting?
 
 todo:
-- allow multiple credentials to be specified for a single path?
-- run as unprivileged user
 - better messages in errorlog
 - write events to error log:  started, reloaded
 - read through code and mention important semantics in manual page
 
-- split config loading in separate module?
 - do hostname lookups for config "listen"?  instead of just ips
 - support transfer-encoding chunked and compressed content-encodings from client?
 - check for security issues with http
 - check spec which error responses must be with/without body
-- ndb file for config?  can be used to select host, port, path.  perhaps even header
-- make faster, prespawn procs?  do less pctl stuff to not need a spawn?!
 - transparent compression?
 - connection rate limiting?
 - think of ssl?

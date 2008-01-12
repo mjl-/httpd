@@ -154,16 +154,20 @@ Require authorization for
 The match on
 .I path
 is a prefix-match, all longer paths will require the same credentials.  Note that the path does not have to end with a slash.
-xxx can multiple user:passes be specified for a single path?  should be
+Only insecure "basic" authorization is supported, "digest" is not.
 The per-host configuration attribute is
 .I auth
 (which should be the empty string).
-.I Realm
-specifies the realm,
+.I Path
+specifies the path,
+.I realm
+the realm,
 .I user
 the user name and
 .I pass
 the password.
+.I Path
+may occur multiple times, each user/pass combination is allowed access.
 .TP
 .BI -C " cachesecs"
 Add header to allow clients to keep the response in their cache for
