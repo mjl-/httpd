@@ -22,6 +22,7 @@ testing:
 - redirects based on path rewriting?
 
 todo:
+- make accesslog optional
 - better messages in errorlog
 - write events to error log:  started, reloaded
 - read through code and mention important semantics in manual page
