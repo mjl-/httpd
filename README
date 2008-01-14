@@ -8,6 +8,7 @@ features:
 - error/access logging
 - index file serving, html directory listings
 - http basic authentication
+- "range" requests, for random access to files
 - redirections with regular expressions
 
 testing:
@@ -20,12 +21,14 @@ testing:
 	- make sure command-line options make sense now (work)
 	- do all changeable config options work after reload?
 - redirects based on path rewriting?
+- accesslog optional
 
 todo:
-- make accesslog optional
 - better messages in errorlog
 - write events to error log:  started, reloaded
 - read through code and mention important semantics in manual page
+- find rfc that handles ip6 addresses in host-header, and understand them with port
+- for some errors, e.g. "range not satisfiable", we must not set the etag?
 
 - do hostname lookups for config "listen"?  instead of just ips
 - support transfer-encoding chunked and compressed content-encodings from client?

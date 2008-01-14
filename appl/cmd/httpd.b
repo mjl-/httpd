@@ -36,41 +36,39 @@ http: Http;
 print, sprint, fprint, fildes: import sys;
 Url, Req, Resp, Hdrs, HTTP_10, HTTP_11, encodepath: import http;
 OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, CONNECT: import http;
-prefix: import str;
 IPaddr: import ipm;
 Db, Dbentry, Tuples: import attrdb;
-Re: import regex;
 
 Version: con "nhttpd/0";
 
 
 Repl: adt {
-	re:	Re;
-	rule:	list of ref (string, int);	# string, replacement index for regex
-	maxrepl:	int;	# highest index for replacement
+	re:	regex->Re;
+	rule:	list of ref (string, int);	# literal string, replacement group for regex
+	maxrepl:	int;	# highest replacement group
 
 	parse:	fn(restr, rulestr: string): (ref Repl, string);
 	apply:	fn(r: self ref Repl, s: string): (int, string, string);
 };
 
-# configs, one cfg per host/port pair
+# config file, holds one Cfg per host,port
 Cfgs: adt {
 	file:	string;
 	db:	ref Db;
 	default:	ref Cfg;
-	configs:	list of (string, string, ref Cfg);
-	getch:	chan of (string, string, chan of (ref Cfg, string));
+	cfgs:	list of (string, string, ref Cfg);	# host, port, config
+	lookupch:	chan of (string, string, chan of ref Cfg);
 
 	init:	fn(file: string): (ref Cfgs, string);
-	get:	fn(c: self ref Cfgs, host, port: string): (ref Cfg, string);
+	lookup:	fn(c: self ref Cfgs, host, port: string): ref Cfg;
 };
 
-# config for a single host/port pair
+# config for a single host,port
 Cfg: adt {
 	host, port:	string;
 	listings, cachesecs:	int;
 	addrs:	list of ref (string, string);	# ip, port
-	cgipaths:	list of ref (string, string, int);	# path, cmd|addr, cgi|scgi
+	cgipaths:	list of ref (string, string, int);	# path, cmd|addr, Cgi|Scgi
 	indexfiles:	list of string;
 	redirs:	list of ref Repl;
 	auths:	list of ref (string, string, string);	# path, realm, base64 user:pass
@@ -79,24 +77,26 @@ Cfg: adt {
 	rev:	fn(cfg: self ref Cfg);
 };
 
-cfgs: ref Cfgs;
+configs: ref Cfgs;
 
 
 # represents a connection and a request on it
 Op: adt {
-	id, now:	int;
+	id:	int;	# connection id, for logging
+	now:	int;	# time of start
 	keepalive:	int;
 	chunked:	int;
 	length:		big;
 	fd:	ref Sys->FD;
-	b:	ref Bufio->Iobuf;
+	inb:	ref Bufio->Iobuf;
 	rhost, rport, lhost, lport:	string;
 	req:	ref Req;
 	resp:	ref Resp;
 	cfg:	ref Cfg;
 };
 
-cgitimeoutsecs: con 3*60;
+Cgitimeoutsecs: con 3*60;
+Keepalivesecs: con 3*60;
 
 debugflag, vhostflag: int;
 defaddr := "net!*!8000";
@@ -104,6 +104,7 @@ addrs: list of string;
 webroot := "";
 credempty: string;
 ctlchan := "";
+logfile := "";
 
 environment: list of (string, string);
 
@@ -111,7 +112,7 @@ Httpd: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
 };
 
-types := array[] of {
+mimetypes := array[] of {
 	(".pdf",	"application/pdf"),
 	(".html",	"text/html; charset=utf-8"),
 	(".htm",	"text/html; charset=utf-8"),
@@ -165,8 +166,10 @@ types := array[] of {
 	(".wav",	"audio/x-wav"),
 	(".jpeg",	"image/jpeg"),
 };
+usertypes: list of ref (string, string);
 
 Eok:			con 200;
+Epartialcontent:	con 206;
 Emovedpermanently:	con 301;
 Enotmodified:		con 304;
 Ebadrequest:		con 400;
@@ -203,7 +206,7 @@ statusmsgs := array[] of {
 	(505,		"HTTP Version Not Supported"),
 };
 
-# relevant known request headers whose values are not allowed to be concatenated (not a full bnf #-rule)
+# relevant known request headers whose values are not allowed to be concatenated (not a bnf #-rule, see rfc2616#2.1)
 nomergeheaders := array[] of {
 	# these two would be useful to merge.  alas, it is not allowed by rfc2616, section 4.2, last paragraph
 	"if-match",
@@ -232,13 +235,12 @@ accessfd: ref Sys->FD;
 Cgi, Scgi: con iota;
 cgitypes := array[] of {"cgi", "scgi"};
 
-cgispawnch: chan of (string, string, string, ref Req, ref Op, big, chan of (ref Sys->FD, ref Sys->FD, string));
+cgispawnch: chan of (string, string, string, ref Op, big, chan of (ref Sys->FD, ref Sys->FD, string));
 scgidialch: chan of (string, chan of (ref Sys->FD, string));
 
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
-	arg := load Arg Arg->PATH;
 	bufio = load Bufio Bufio->PATH;
 	env = load Env Env->PATH;
 	daytime = load Daytime Daytime->PATH;
@@ -258,32 +260,39 @@ init(nil: ref Draw->Context, args: list of string)
 	http = load Http Http->PATH;
 	http->init(bufio);
 
-	(cfgs, err) = Cfgs.init("/dev/null");
+	(configs, err) = Cfgs.init("/dev/null");
 	if(err != nil)
 		fail("making empty config: "+err);
-	defcfg := cfgs.default = Cfg.new();
+	defcfg := configs.default = Cfg.new();
 
+	arg := load Arg Arg->PATH;
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-dhl] [-A path realm user:pass] [-C cachesecs] [-a addr] [-c path command] [-f ctlchan] [-i indexfile] [-n config] [-r pathre dest] [-s path addr] [-t extension mimetype] webroot");
+	arg->setusage(arg->progname()+" [-dhL] [-A path realm user:pass] [-C cachesecs] [-a addr] [-c path command] [-f ctlchan] [-i indexfile] [-l logfile] [-n config] [-r pathre dest] [-s path addr] [-t extension mimetype] webroot");
 	while((c := arg->opt()) != 0)
 		case c {
 		'A' =>	defcfg.auths = ref (arg->earg(), arg->earg(), base64->enc(array of byte arg->earg()))::defcfg.auths;
+			if(haschar((hd defcfg.auths).t1, '"')) {
+				fprint(fildes(2), "realm must not have double quote, not supported by http/1.0");
+				raise "fail:usage";
+			}
 		'C' =>	defcfg.cachesecs = int arg->earg();
+		'L' =>	defcfg.listings++;
 		'a' =>	addrs = arg->earg()::addrs;
 		'c' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), Cgi)::defcfg.cgipaths;
 		'd' =>	debugflag++;
 		'f' =>	ctlchan = arg->earg();
 		'h' =>	vhostflag++;
 		'i' =>	defcfg.indexfiles = arg->earg()::defcfg.indexfiles;
-		'l' =>	defcfg.listings++;
+		'l' =>	logfile = arg->earg();
 		'n' =>
 			file := arg->earg();
-			(cfgs, err) = Cfgs.init(file);
+			(configs, err) = Cfgs.init(file);
 			if(err != nil) {
 				fprint(fildes(2), "reading %q: %s\n", file, err);
 				raise "fail:usage";
 			}
 			defcfg.rev();
+			usertypes = rev(usertypes);
 		'r' =>
 			(restr, rulestr) := (arg->earg(), arg->earg());
 			(repl, rerr) := Repl.parse(restr, rulestr);
@@ -293,11 +302,7 @@ init(nil: ref Draw->Context, args: list of string)
 			}
 			defcfg.redirs = repl::defcfg.redirs;
 		's' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), Scgi)::defcfg.cgipaths;
-		't' =>	(extension, mimetype) := (arg->earg(), arg->earg());
-			ntypes := array[len types+1] of (string, string);
-			ntypes[0] = (extension, mimetype);
-			ntypes[1:] = types;
-			types = ntypes;
+		't' =>	usertypes = ref (arg->earg(), arg->earg())::usertypes;
 		* =>	arg->usage();
 		}
 	args = arg->argv();
@@ -305,29 +310,32 @@ init(nil: ref Draw->Context, args: list of string)
 		arg->usage();
 	webroot = hd args;
 	defcfg.rev();
-	credempty = base64->enc(array of byte ":");
+	usertypes = rev(usertypes);
+	credempty = base64->enc(array of byte ":");	# empty-user:empty-pass
 
 	environment = env->getall();
 
 	if(ctlchan != nil) {
-		fileio := sys->file2chan("/chan", ctlchan);
-		if(fileio == nil)
+		fio := sys->file2chan("/chan", ctlchan);
+		if(fio == nil)
 			fail(sprint("file2chan in /chan: %q: %r", ctlchan));
-		spawn ctlhandler(fileio);
+		spawn ctlhandler(fio);
 	}
 
 	sys->pctl(Sys->FORKNS|Sys->FORKENV|Sys->FORKFD, nil);
 	if(sys->chdir(webroot) != 0)
-		fail(sprint("chdir webroot %s: %r", webroot));
+		fail(sprint("chdir webroot %q: %r", webroot));
 
 	timefd = sys->open("/dev/time", Sys->OREAD);
 	if(timefd == nil)
 		fail(sprint("open /dev/time: %r"));
 
 	errorfd = sys->open("/services/logs/httpderror", Sys->OWRITE);
-	accessfd = sys->open("/services/logs/httpdaccess", Sys->OWRITE);
 	if(errorfd != nil)
 		sys->seek(errorfd, big 0, Sys->SEEKEND);
+
+	if(logfile != nil)
+		accessfd = sys->open("/services/logs/httpdaccess", Sys->OWRITE);
 	if(accessfd != nil)
 		sys->seek(accessfd, big 0, Sys->SEEKEND);
 
@@ -341,7 +349,7 @@ init(nil: ref Draw->Context, args: list of string)
 	excch = chan of (int, chan of string);
 	spawn exceptsetter();
 
-	cgispawnch = chan of (string, string, string, ref Req, ref Op, big, chan of (ref Sys->FD, ref Sys->FD, string));
+	cgispawnch = chan of (string, string, string, ref Op, big, chan of (ref Sys->FD, ref Sys->FD, string));
 	spawn cgispawner();
 
 	scgidialch = chan of (string, chan of (ref Sys->FD, string));
@@ -357,17 +365,17 @@ announce(addr: string)
 {
 	(aok, aconn) := sys->announce(addr);
 	if(aok != 0)
-		fail(sprint("announce %s: %r", addr));
-	say("announed to "+addr);
+		fail(sprint("announce %q: %r", addr));
+	say(sprint("announed to %q", addr));
 	for(;;) {
 		(lok, lconn) := sys->listen(aconn);
 		if(lok != 0)
-			fail(sprint("listen %s: %r", addr));
+			fail(sprint("listen %q: %r", addr));
 		dfd := sys->open(lconn.dir+"/data", Sys->ORDWR);
 		if(dfd != nil)
 			spawn httpserve(dfd, lconn.dir);
 		else
-			say(sprint("opening data file: %r"));
+			say(sprint("open connection file: %r"));
 		lconn.dfd = nil;
 	}
 }
@@ -387,8 +395,7 @@ randgen()
 
 killer()
 {
-	for(;;)
-	alt {
+	for(;;) alt {
 	pid := <-killch =>
 		kill(pid);
 	(pid, timeout, respch) := <-killschedch =>
@@ -411,8 +418,10 @@ exceptsetter()
 		fd := sys->open(sprint("/prog/%d/ctl", pid), Sys->OWRITE);
 		if(fd == nil || fprint(fd, "exceptions notifyleader") == -1)
 			err = sprint("setting exception handling for pid %d: %r", pid);
-		if(respch == nil && err != nil)
-			fail("exceptsetter: "+err);
+		if(respch == nil && err != nil) {
+			warn(-1, sprint("setting exceptions notifyleader for pid %d: %s", pid, err));
+			kill(pid);
+		}
 		if(respch != nil)
 			respch <-= err;
 	}
@@ -421,13 +430,14 @@ exceptsetter()
 cgispawner()
 {
 	for(;;) {
-		(cmd, path, cgipath, req, op, length, replych) := <-cgispawnch;
-		spawn cgispawn(cmd, path, cgipath, req, op, length, replych);
+		(cmd, path, cgipath, op, length, replych) := <-cgispawnch;
+		spawn cgispawn(cmd, path, cgipath, op, length, replych);
 	}
 }
 
-cgispawn(cmd, path, cgipath: string, req: ref Req, op: ref Op, length: big, replych: chan of (ref Sys->FD, ref Sys->FD, string))
+cgispawn(cmd, path, cgipath: string, op: ref Op, length: big, replych: chan of (ref Sys->FD, ref Sys->FD, string))
 {
+	# create pipes before pctl newfs, to keep them off stdin,stdout,stderr
 	fd0 := array[2] of ref Sys->FD;
 	fd1 := array[2] of ref Sys->FD;
 	fd2 := array[2] of ref Sys->FD;
@@ -435,13 +445,13 @@ cgispawn(cmd, path, cgipath: string, req: ref Req, op: ref Op, length: big, repl
 		replych <-= (nil, nil, sprint("pipe: %r"));
 		return;
 	}
-	spawn errlogger(fd2[0]);
+	spawn errlogger(cmd, op, fd2[0]);
 
 	if(sys->pctl(Sys->NEWFD|Sys->FORKNS|Sys->FORKENV, fd0[1].fd::fd1[1].fd::fd2[1].fd::nil) < 0) {
-		replych <-= (nil, nil, sprint("pctl newfd: %r"));
+		replych <-= (nil, nil, sprint("pctl newfd,forkns,forkenv: %r"));
 		return;
 	}
-	for(l := cgivars(path, cgipath, req, op, length, nil); l != nil; l = tl l)
+	for(l := cgivars(path, cgipath, op, length, nil); l != nil; l = tl l)
 		env->setenv((hd l).t0, (hd l).t1);
 
 	if(sys->dup(fd0[1].fd, 0) == -1 || sys->dup(fd1[1].fd, 1) == -1 || sys->dup(fd2[1].fd, 2) == -1) {
@@ -452,18 +462,18 @@ cgispawn(cmd, path, cgipath: string, req: ref Req, op: ref Op, length: big, repl
 	fd0 = fd1 = fd2 = nil;
 	err := sh->system(nil, cmd);
 	if(err != nil)
-		say(sprint("cgispawn, cmd %q: %s", cmd, err));
+		warn(op.id, sprint("cgispawn, cmd %q: %s", cmd, err));
 }
 
-errlogger(fd: ref Sys->FD)
+errlogger(cmd: string, op: ref Op, fd: ref Sys->FD)
 {
 	for(;;) {
 		n := sys->read(fd, d := array[Sys->ATOMICIO] of byte, len d);
 		if(n < 0)
-			die(-1, sprint("reading stderr: %r"));
+			die(op.id, sprint("reading stderr: %r"));
 		if(n == 0)
 			break;
-		say(string d[:n]);
+		warn(op.id, sprint("%q: %s", cmd, string d[:n]));
 	}
 }
 
@@ -478,10 +488,9 @@ scgidialer()
 scgidial(scgiaddr: string, replychan: chan of (ref Sys->FD, string))
 {
 	(ok, conn) := sys->dial(scgiaddr, nil);
-	if(ok < 0) {
-		say(sprint("dialing scgid %s: %r", scgiaddr));
-		replychan <-= (nil, "dialing scgid failed");
-	} else
+	if(ok < 0)
+		replychan <-= (nil, sprint("dialing scgid %q: %r", scgiaddr));
+	else
 		replychan <-= (conn.dfd, nil);
 }
 
@@ -501,13 +510,13 @@ ctlhandler(fio: ref Sys->FileIO)
 			s = s[:len s-1];
 		case s {
 		"reload" =>
-			if(cfgs.db.reopen() != 0) {
-				msg := sprint("reopening config files: %r");
+			if(configs.db.reopen() != 0) {
+				msg := sprint("reopening config file: %r");
 				say(msg);
 				wc <-= (0, msg);
 				continue;
 			}
-			err := cfgsread(cfgs);
+			err := cfgsread(configs);
 			if(err != nil) {
 				msg := "error reloading config, keeping current: "+err;
 				say(msg);
@@ -528,6 +537,8 @@ httpserve(fd: ref Sys->FD, conndir: string)
 
 	(lhost, lport) := readaddr(id, conndir+"/local");
 	(rhost, rport) := readaddr(id, conndir+"/remote");
+	lhost = IPaddr.parse(lhost).t1.text();
+	rhost = IPaddr.parse(rhost).t1.text();
 	chat(id, sprint("connect from %s:%s to %s:%s", rhost, rport, lhost, lport));
 
 	pid := sys->pctl(Sys->NEWPGRP|Sys->FORKNS|Sys->NODEVS, nil);
@@ -550,17 +561,21 @@ httpserve(fd: ref Sys->FD, conndir: string)
 
 		op.chunked = op.keepalive = 0;
 		op.length = big -1;
+		op.req = nil;
+		op.resp = nil;
+		op.cfg = nil;
 		httptransact(pid, b, op);
 	}
 }
 
 httptransact(pid: int, b: ref Iobuf, op: ref Op)
 {
-	id := op.now;
+	id := op.id;
 	op.now = readtime();
 	hdrs := Hdrs.new(("server", Version)::nil);
 
-	killschedch <-= (pid, 3*60*1000, respch := chan of int);
+	# kill ourselve when no request comes in
+	killschedch <-= (pid, Keepalivesecs*1000, respch := chan of int);
 	killpid := <-respch;
 
 	(req, rerr) := Req.read(b);
@@ -568,7 +583,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(rerr != nil) {
 		hdrs.add("connection", "close");
 		op.resp = Resp.mk(HTTP_10, nil, nil, hdrs);
-		responderrmsg(op, Ebadrequest, "Bad Request: parsing message: "+rerr);
+		responderrmsg(op, Ebadrequest, "Bad Request: reading request: "+rerr);
 		killch <-= killpid;
 		die(id, "reading request: "+rerr);
 	}
@@ -585,28 +600,24 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 
 	# all values besides "close" are supposedly header names, not important
 	(contoks, conerr) := tokenize(req.h.getlist("connection"));
-	op.keepalive = req.version() >= HTTP_11 && conerr == nil && !listhas(listlower(contoks), "close");
+	op.keepalive = req.version() >= HTTP_11 && conerr == nil && !listhas(contoks, "close");
 	op.resp = resp := Resp.mk(req.version(), "200", "OK", hdrs);
 
 	# tell client if it is sending ambiguous requests: duplicate headers of the important kind
 	for(i := 0; i < len nomergeheaders; i++)
 		if(len req.h.findall(nomergeheaders[i]) > 1)
-			return responderrmsg(op, Ebadrequest, sprint("Bad Request: You sent duplicate headers for \"%s\"", nomergeheaders[i]));
+			return responderrmsg(op, Ebadrequest, sprint("Bad Request: Duplicate headers:  %s", nomergeheaders[i]));
 
 	if(req.h.has("proxy-authorization", nil))
-		return responderrmsg(op, Ebadrequest, "Bad Request: You or a proxy server sent Proxy-Authorization credentials");
+		return responderrmsg(op, Ebadrequest, "Bad Request: Proxy-Authorization credentials sent, unacceptable");
 
 	if(req.version() >= HTTP_11 && !req.h.has("host", nil))
 		return responderrmsg(op, Ebadrequest, "Bad Request: Missing header \"Host\"");
 
 	host := str->splitl(req.h.get("host"), ":").t0;
-	(cfg, err) := cfgs.get(host, op.lport);
-	if(err == "no config")
+	op.cfg = cfg := configs.lookup(host, op.lport);
+	if(cfg == nil)
 		return responderrmsg(op, Enotfound, nil);
-	if(err != nil) {
-		chat(id, "getting config: "+err);
-		return responderrmsg(op, Eservererror, "Internal Server Error: Configuration not available");
-	}
 
 	# do not accept request when doing vhost and request is from ip that we shouldn't serve host:port on
 	addrokay := !vhostflag || cfg.addrs == nil;
@@ -615,16 +626,11 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 			(chost, cport) := *(hd as);
 			addrokay = chost == op.lhost && cport == op.lport;
 		}
+		if(!addrokay) {
+			chat(id, "request on ip:port, not allowed");
+			return responderrmsg(op, Enotfound, nil);
+		}
 	}
-
-	if(cfg == nil || !addrokay) {
-		if(cfg == nil)
-			chat(id, sprint("no config for host %q port %q", host, op.lport));
-		else
-			chat(id, "request on not allowed ip:port");
-		return responderrmsg(op, Enotfound, nil);
-	}
-	op.cfg = cfg;
 
 	case req.method {
 	GET or HEAD or POST =>
@@ -647,8 +653,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		return responderrmsg(op, Enotimplemented, "Unknown Method: "+http->methodstr(req.method));
 	}
 
+	# remove occurrences of "/elem/../" from path, returned path always starts with "/"
 	path := pathsanitize(req.url.path);
-	chat(id, "path is "+path);
 
 	# we ignore the port in the host-header.  this is illegal according to rfc2616, but using it is just silly.
 	# also, we violate rfc2616 by sending 404 "not found" when the host doesn't exist.
@@ -659,7 +665,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	} else {
 		(hostdir, nil) = str->splitstrl(hostdir, ":");
 		if(str->drop(hostdir, "0-9a-zA-Z.-") != nil || str->splitstrl(hostdir, "..").t1 != nil)
-			return responderrmsg(op, Enotfound, nil);
+			return responderrmsg(op, Ebadrequest, nil);
 		hostdir += ":"+cfg.port;
 	}
 	if(vhostflag && sys->chdir(hostdir) != 0) {
@@ -669,27 +675,29 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 			return responderrmsg(op, Enotfound, nil);
 	}
 
-	haveauth := needauth := 0;
+	validauth := needauth := 0;
 	realm: string;
-	which, cred: string;
-	(which, cred) = str->splitstrr(req.h.get("authorization"), " ");
-	if(str->tolower(which) != "basic ")
+	authtype, cred: string;
+	(authtype, cred) = str->splitstrr(req.h.get("authorization"), " ");
+	if(str->tolower(authtype) != "basic ")
 		cred = nil;
-	for(a := cfg.auths; !haveauth && a != nil; a = tl a) {
+	else
+		cred = stripws(cred);
+	for(a := cfg.auths; !validauth && a != nil; a = tl a) {
 		(apath, arealm, acred) := *hd a;
-		if(prefix(apath, path)) {
+		if(str->prefix(apath, path)) {
 			needauth = 1;
 			realm = arealm;
-			haveauth = cred == acred;
+			validauth = cred == acred;
 		}
 	}
-	if(needauth && !haveauth) {
-		resp.h.add("www-authenticate", sprint("Basic realm=\"%s\"", realm));	# xxx doublequote-quote realm?
+	if(needauth && !validauth) {
+		resp.h.add("www-authenticate", sprint("Basic realm=\"%s\"", realm));
 		return responderrmsg(op, Eunauthorized, nil);
 	}
 	if(req.h.has("authorization", nil) && !needauth && cred != credempty) {
 		resp.h.add("www-authenticate", sprint("Basic realm=\"authentication not allowed\""));
-		return responderrmsg(op, Eunauthorized, "You sent authorization credentials which is not allowed by this resource.  Please use an empty username and password or do not send authorization credentials altogether.");
+		return responderrmsg(op, Eunauthorized, "Sending authorization credentials is not allowed for this resource.  Please use an empty username and password or do not send authorization credentials altogether.");
 	}
 
 	for(r := cfg.redirs; r != nil; r = tl r) {
@@ -701,16 +709,25 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		}
 		if(!match)
 			continue;
-		resp.h.set("location", dest);	# xxx return absolute url?
+		if(!str->prefix("http:", dest)) {
+			if(havehost)
+				dest = "http://"+host+dest;
+			else {
+				lport := "";
+				if(op.lport != "80")
+					lport = ":"+op.lport;
+				dest = "http://"+op.lhost+lport+dest;
+			}
+		}
+		resp.h.set("location", dest);
 		dest = htmlescape(dest);
 		return responderrmsg(op, Emovedpermanently, sprint("Moved Permanently: moved to <a href=\"%s\">%s</a>", dest, dest));
 	}
 
 	# if path is cgi-handled, let cgi() handle the request
 	if(((cgipath, cgiaction, cgitype) := findcgi(cfg, path)).t1 != nil) {
-		timeo := cgitimeoutsecs*1000;
-		donech := chan of int;
-		spawn timeout(op, timeo, timeoch := chan of int, donech);
+		timeo := Cgitimeoutsecs*1000;
+		spawn timeout(op, timeo, timeoch := chan of int, donech := chan of int);
 		timeopid := <- timeoch;
 		spawn cgi(path, op, cgipath, cgiaction, cgitype, timeopid, timeoch, donech);
 		<-donech;
@@ -721,17 +738,16 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	dfd := sys->open("."+path, Sys->OREAD);
 	if(dfd != nil)
 		(dok, dir) := sys->fstat(dfd);
-	if(dir.mode&Sys->DMDIR && path[len path-1] == '/') {
+	if(dok == 0 && dir.mode&Sys->DMDIR && path[len path-1] == '/') {
 		for(l := cfg.indexfiles; l != nil; l = tl l) {
 			ipath := "."+path+hd l;
 			(iok, idir) := sys->stat(ipath);
-			if(iok != 0)
+			if(iok != 0 || idir.mode&Sys->DMDIR)
 				continue;
 			ifd := sys->open(ipath, Sys->OREAD);
 			if(ifd == nil)
 				return responderrmsg(op, Enotfound, nil);
 			dfd = ifd;
-			dok = iok;
 			dir = idir;
 			path += hd l;
 			break;
@@ -749,33 +765,86 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	tag := etag(path, op, dir);
 	resp.h.add("etag", tag);
 
-	ifmatch := req.h.get("if-match");
-	if(req.version() >= HTTP_11 && ifmatch != nil && !etagmatch(req.version(), tag, ifmatch, 1))
-		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: etags %s, specified with If-Match did not match", htmlescape(ifmatch)));
+	ifmatch, ifnonematch, ifunmodsincestr: string;
+	havecond: int;
+	(havecond, ifmatch) = req.h.find("if-match");
+	if(req.version() >= HTTP_11 && havecond && !etagmatch(req.version(), tag, ifmatch, 1))
+		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: Etags %q, specified with If-Match did not match", htmlescape(ifmatch)));
 
 	ifmodsince := parsehttpdate(req.h.get("if-modified-since"));
-	chat(id, sprint("ifmodsince, %d, mtime %d", ifmodsince, dir.mtime));
 	# http/1.0, head and if-modified-since: rfc1945#8.1;  unsupported date value can safely be ignored.
 	if(!(req.version() == HTTP_10 && req.method == HEAD) && ifmodsince && dir.mtime <= ifmodsince)
 		return responderr(op, Enotmodified);
 
-	ifnonematch := req.h.get("if-none-match");
-	if(req.version() >= HTTP_11 && ifnonematch != nil && req.method == GET && etagmatch(req.version(), tag, ifnonematch, 0))
+	(havecond, ifnonematch) = req.h.find("if-none-match");
+	if(req.version() >= HTTP_11 && havecond && req.method == GET && etagmatch(req.version(), tag, ifnonematch, 0))
 		return responderr(op, Enotmodified);
 
 	# unsupported date value causes a "precondition failed"
-	ifunmodsince := parsehttpdate(ifunmodsincestr := req.h.get("if-unmodified-since"));
-	chat(id, sprint("ifunmodsince, %d", ifunmodsince));
-	if(req.version() >= HTTP_11 && (ifunmodsince && dir.mtime > ifunmodsince || ifunmodsincestr != nil && !ifunmodsince))
-		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: object has been modified since %s", req.h.get("if-unmodified-since")));
+	(havecond, ifunmodsincestr) = req.h.find("if-unmodified-since");
+	ifunmodsince := parsehttpdate(ifunmodsincestr);
+	if(req.version() >= HTTP_11 && (ifunmodsince && dir.mtime > ifunmodsince || havecond && ifunmodsince == 0))
+		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: Object has been modified since %s", req.h.get("if-unmodified-since")));
 
-	if(cfg.cachesecs)
-		resp.h.add("cache-control", maxage(op.cfg, path));
+	if(cfg.cachesecs >= 0)
+		resp.h.add("cache-control", sprint("maxage=%d", cfg.cachesecs));
 
-	if(dir.mode & Sys->DMDIR)
+	if(dir.mode&Sys->DMDIR)
 		listdir(path, op, dfd);
 	else
 		plainfile(path, op, dfd, dir, tag);
+}
+
+pathsanitize(path: string): string
+{
+	say("path sanitize: "+path);
+	trailslash := path != nil && path[len path-1] == '/';
+
+	(nil, elems) := sys->tokenize(path, "/");
+	r: list of string;
+	for(; elems != nil; elems = tl elems)
+		if(hd elems == ".")
+			continue;
+		else if(hd elems == "..") {
+			if(r != nil)
+				r = tl r;
+		} else
+			r = hd elems::r;
+	s := "";	
+	for(; r != nil; r = tl r)
+		s = "/"+hd r+s;
+	if(trailslash || s == "")
+		s += "/";
+	return s;
+}
+
+findcgi(cfg: ref Cfg, path: string): (string, string, int)
+{
+	for(l := cfg.cgipaths; l != nil; l = tl l)
+		if(str->prefix((*hd l).t0, path))
+			return *hd l;
+	return (nil, nil, 0);
+}
+
+etag(path: string, op: ref Op, dir: Sys->Dir): string
+{
+	host := str->splitstrl(op.req.h.get("host"), ":").t0;
+	if(host == nil)
+		host = "_default";
+	return "\""+sha1(array of byte sprint("%d,%d,%s,%s,%s", dir.qid.vers, dir.mtime, host, op.lport, path))+"\"";
+}
+
+etagmatch(version: int, etag: string, etagstr: string, strong: int): int
+{
+	if(etagstr == "*")
+		return 1;
+	(l, err) := tokenizeqs(etagstr, version);
+	if(err != nil)
+		return 0;	# xxx respond with "bad request"?
+	for(; l != nil; l = tl l)
+		if(hd l == etag && (!strong || !str->prefix("W/", hd l)))
+			return 1;
+	return 0;
 }
 
 plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string)
@@ -785,12 +854,12 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 	resp := op.resp;
 
 	chat(id, "doing plain file");
-	ct := gettype(path);
+	ct := mimetype(path);
 	resp.h.add("content-type", ct);
 	op.length = dir.length;
 	resp.h.add("content-length", string op.length);
 
-	(valid, ranges) := parserange(req.version(), req.h.get("range"), dir);
+	(valid, ranges) := parserange(req.version(), req.h.find("range"), dir.length);
 	if(!valid) {
 		resp.h.add("content-range", sprint("bytes */%bd", dir.length));
 		return responderrmsg(op, Enotsatisfiable, nil);
@@ -809,8 +878,8 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 			resp.h.set("content-type", "multipart/byteranges; boundary="+bound);
 			op.chunked = resp.version() >= HTTP_11;
 		}
-		resp.st = "206";
-		resp.stmsg = "partial content";
+		resp.st = string Epartialcontent;
+		resp.stmsg = "Partial Content";
 	} else
 		ranges = ref (big 0, dir.length)::nil;
 
@@ -825,13 +894,16 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 
 	for(; ranges != nil; ranges = tl ranges) {
 		(off, end) := *hd ranges;
-		if(bound != nil)
-			hwrite(op, array of byte sprint("--%s\r\ncontent-type: %s\r\ncontent-range: bytes %bd-%bd/%bd\r\n\r\n", bound, ct, off, end-big 1, dir.length));
+		if(bound != nil) {
+			s := sprint("--%s\r\ncontent-type: %s\r\ncontent-range: bytes %bd-%bd/%bd\r\n\r\n",
+				bound, ct, off, end-big 1, dir.length);
+			hwrite(op, array of byte s);
+		}
 		while(off < end) {
-			want := int (end-off);
-			if(want > Sys->ATOMICIO)
-				want = Sys->ATOMICIO;
-			n := sys->pread(dfd, d := array[want] of byte, len d, off);
+			want := end-off;
+			if(want > big Sys->ATOMICIO)
+				want = big Sys->ATOMICIO;
+			n := sys->pread(dfd, d := array[int want] of byte, len d, off);
 			if(n < 0)
 				die(id, sprint("reading file: %r"));
 			if(n == 0)
@@ -848,6 +920,7 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 listdir(path: string, op: ref Op, dfd: ref Sys->FD)
 {
 	id := op.id;
+	req := op.req;
 	resp := op.resp;
 
 	chat(id, "doing directory listing");
@@ -860,7 +933,7 @@ listdir(path: string, op: ref Op, dfd: ref Sys->FD)
 	if(rerr != nil)
 		die(id, "writing response: "+rerr);
 
-	if(op.req.method == HEAD)
+	if(req.method == HEAD)
 		return;
 
 	begin := mkhtmlstart("listing for "+path) + sprint("<h1>listing for %s</h1><hr/><table><tr><th>last modified</th><th>size</th><th>name</th></tr>\n", pathurls(path));
@@ -883,6 +956,48 @@ listdir(path: string, op: ref Op, dfd: ref Sys->FD)
 	end := sprint("</table><hr/></body></html>\n");
 	hwrite(op, array of byte end);
 	hwriteeof(op);
+}
+
+mkhtmlstart(msg: string): string
+{
+	return sprint("<html><head>\n<style type=\"text/css\">\nh1 { font-size: 1.4em; }\ntd, th { padding-left: 1em; padding-right: 1em; }\ntd.mtime, td.size { text-align: right; }\n</style>\n<title>%s</title>\n</head><body>\n", htmlescape(msg));
+}
+
+mkhtml(msg: string): string
+{
+	return mkhtmlstart(msg)+sprint("\n<h1>%s</h1>\n</body></html>\n", htmlescape(msg));
+}
+
+htmlescape(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++)
+		case s[i] {
+		'<' =>	r += "&lt;";
+		'>' =>	r += "&gt;";
+		'&' =>	r += "&amp;";
+		'"' =>	r += "&quot;";
+		* =>	r += s[i:i+1];
+		}
+	return r;
+}
+
+pathurls(s: string): string
+{
+	(nil, l) := sys->tokenize(s, "/");
+	r := "";
+	i := 0;
+	path := "./";
+	for(l = rev(l); l != nil; l = tl l) {
+		r = sprint(" <a href=\"%s\">%s/</a>", path, htmlescape(hd l))+r;
+		if(i == 0)
+			path = "../";
+		else
+			path += "../";
+		i += 1;
+	}
+	r = sprint("<a href=\"%s\">/</a>", path)+r;
+	return r;
 }
 
 timeout(op: ref Op, timeo: int, timeoch, donech: chan of int)
@@ -979,8 +1094,10 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 	if(cgitype == Scgi) {
 		scgidialch <-= (cgiaction, replychan := chan of (ref Sys->FD, string));
 		(sfd, serr) := <-replychan;
-		if(serr != nil)
+		if(serr != nil) {
+			warn(op.id, serr);
 			return responderrmsg(op, Eservererror, nil);
+		}
 
 		sreq := scgirequest(path, cgipath, req, op, length);
 		if(sys->write(sfd, sreq, len sreq) != len sreq) {
@@ -990,7 +1107,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 		fd0 = fd1 = sfd;
 	} else {
 		err: string;
-		cgispawnch <-= (cgiaction, path, cgipath, req, op, length, replych := chan of (ref Sys->FD, ref Sys->FD, string));
+		cgispawnch <-= (cgiaction, path, cgipath, op, length, replych := chan of (ref Sys->FD, ref Sys->FD, string));
 		(fd0, fd1, err) = <-replych;
 		if(err != nil) {
 			chat(id, "cgispawn: "+err);
@@ -999,7 +1116,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 	}
 
 	if(length > big 0)
-		spawn cgifunnel(op.b, fd0, length);
+		spawn cgifunnel(op.inb, fd0, length);
 
 	sb := bufio->fopen(fd1, Bufio->OREAD);
 	if(sb == nil) {
@@ -1009,7 +1126,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 
 	l := sb.gets('\n');
 	killch <-= timeopid;
-	if(!prefix("status:", str->tolower(l))) {
+	if(!str->prefix("status:", str->tolower(l))) {
 		chat(id, "bad cgi response line: "+l);
 		return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
 	}
@@ -1088,6 +1205,61 @@ cgifunnel(b: ref Iobuf, sfd: ref Sys->FD, length: big)
 	}
 }
 
+cgivars(path, cgipath: string, op: ref Op, length: big, environ: list of (string, string)): list of (string, string)
+{
+	servername := op.req.h.get("host");
+	if(servername == nil)
+		servername = op.lhost;
+	pathinfo := path[len cgipath:];
+	query := op.req.url.query;
+	if(query != nil)
+		query = query[1:];
+	return	("CONTENT_LENGTH",	string length)::
+		("GATEWAY_INTERFACE",	"CGI/1.1")::
+		("SERVER_PROTOCOL",	http->versionstr(op.req.version()))::
+		("SERVER_NAME",		servername)::
+		("REQUEST_METHOD",	http->methodstr(op.req.method))::
+		("REQUEST_URI",		op.req.url.packpath())::
+		("SCRIPT_NAME",		cgipath)::
+		("PATH_INFO",		pathinfo)::
+		("PATH_TRANSLATED",	pathinfo)::
+		("QUERY_STRING",	query)::
+		("SERVER_ADDR",		op.lhost)::
+		("SERVER_PORT",		op.lport)::
+		("REMOTE_ADDR",		op.rhost)::
+		("REMOTE_PORT",		op.rport)::
+		("SERVER_SOFTWARE",	Version)::
+		environ;
+}
+
+scgirequest(path, scgipath: string, req: ref Req, op: ref Op, length: big): array of byte
+{
+	l := ("SCGI", "1")::cgivars(path, scgipath, op, length, environment);
+	s := "";
+	for(h := l; h != nil; h = tl h)
+		s += (hd h).t0+"\0"+(hd h).t1+"\0";
+	for(h = req.h.all(); h != nil; h = tl h)
+		s += cgivar((hd h).t0)+"\0"+(hd h).t1+"\0";
+	return netstring(s);
+}
+
+cgivar(s: string): string
+{
+	r := "HTTP_";
+	for(i := 0; i < len s; i++)
+		if(s[i] != '-')
+			r[len r] = s[i];
+		else
+			r[len r] = '_';
+	return str->toupper(r);
+}
+
+netstring(s: string): array of byte
+{
+	return array of byte (sprint("%d:", len s)+s+",");
+}
+
+
 hresp(resp: ref Resp, fd: ref Sys->FD, keepalive, chunked: int): string
 {
 	if(keepalive)
@@ -1115,7 +1287,7 @@ hwrite(op: ref Op, d: array of byte)
 		d = nd;
 	}
 	if(sys->write(op.fd, d, len d) != len d)
-		fail(sprint("writing response data: %r"));
+		die(op.id, sprint("writing response data: %r"));
 }
 
 hwriteeof(op: ref Op)
@@ -1162,27 +1334,12 @@ responderrmsg(op: ref Op, st: int, errmsg: string)
 	return respond(op, st, mkhtml(sprint("%d - %s", st, errmsg)), "text/html; charset=utf-8");
 }
 
-mkhtmlstart(msg: string): string
+statusmsg(code: int): string
 {
-	return sprint("<html><head><style type=\"text/css\">h1 { font-size: 1.4em; } td, th { padding-left: 1em; padding-right: 1em; } td.mtime, td.size { text-align: right; }</style><title>%s</title></head><body>", htmlescape(msg));
-}
-
-mkhtml(msg: string): string
-{
-	return mkhtmlstart(msg)+sprint("<h1>%s</h1></body></html>\n", htmlescape(msg));
-}
-
-etag(path: string, op: ref Op, dir: Sys->Dir): string
-{
-	host := op.req.h.get("host");
-	if(host == nil)
-		host = "_default";
-	return "\""+sha1(array of byte sprint("%d,%d,%s,%s,%s", dir.qid.vers, dir.mtime, host, op.lport, path))+"\"";
-}
-
-maxage(cfg: ref Cfg, nil: string): string
-{
-	return sprint("maxage=%d", cfg.cachesecs);
+	for(i := 0; i < len statusmsgs && statusmsgs[i].t0 <= code; i++)
+		if(code == statusmsgs[i].t0)
+			return statusmsgs[i].t1;
+	raise sprint("missing status message for code %d", code);
 }
 
 accesslog(op: ref Op)
@@ -1190,125 +1347,11 @@ accesslog(op: ref Op)
 	length := "";
 	if(!op.chunked && op.length >= big 0)
 		length = string op.length;
-	if(accessfd != nil && op.req != nil)
-		fprint(accessfd, "%d %d %s!%s %s!%s %q %q %q %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.h.get("host"), op.req.url.path, sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg, length, op.req.h.get("user-agent"), op.req.h.get("referer"));
-}
 
-findcgi(cfg: ref Cfg, path: string): (string, string, int)
-{
-	for(l := cfg.cgipaths; l != nil; l = tl l)
-		if(str->prefix((*hd l).t0, path))
-			return *hd l;
-	return (nil, nil, 0);
-}
-
-htmlescape(s: string): string
-{
-	r := "";
-	for(i := 0; i < len s; i++)
-		case s[i] {
-		'<' =>	r += "&lt;";
-		'>' =>	r += "&gt;";
-		'&' =>	r += "&amp;";
-		'"' =>	r += "&quot;";
-		* =>	r += s[i:i+1];
-		}
-	return r;
-}
-
-pathsanitize(path: string): string
-{
-	say("path sanitize: "+path);
-	trailslash := path != nil && path[len path-1] == '/';
-
-	(nil, elems) := sys->tokenize(path, "/");
-	r: list of string;
-	for(; elems != nil; elems = tl elems)
-		if(hd elems == ".")
-			continue;
-		else if(hd elems == "..") {
-			if(r != nil)
-				r = tl r;
-		} else
-			r = hd elems::r;
-	s := "";	
-	for(; r != nil; r = tl r)
-		s = "/"+hd r+s;
-	if(trailslash || s == "")
-		s += "/";
-	return s;
-}
-
-pathurls(s: string): string
-{
-	(nil, l) := sys->tokenize(s, "/");
-	r := "";
-	i := 0;
-	path := "./";
-	for(l = rev(l); l != nil; l = tl l) {
-		r = sprint(" <a href=\"%s\">%s/</a>", path, htmlescape(hd l))+r;
-		if(i == 0)
-			path = "../";
-		else
-			path += "../";
-		i += 1;
-	}
-	r = sprint("<a href=\"%s\">/</a>", path)+r;
-	return r;
-}
-
-cgivars(path, cgipath: string, req: ref Req, op: ref Op, length: big, environ: list of (string, string)): list of (string, string)
-{
-	servername := req.h.get("host");
-	if(servername == nil)
-		servername = op.lhost;
-	pathinfo := path[len cgipath:];
-	query := req.url.query;
-	if(query != nil)
-		query = query[1:];
-	return	("CONTENT_LENGTH",	string length)::
-		("GATEWAY_INTERFACE",	"CGI/1.1")::
-		("SERVER_PROTOCOL",	http->versionstr(req.version()))::
-		("SERVER_NAME",		servername)::
-		("REQUEST_METHOD",	http->methodstr(req.method))::
-		("REQUEST_URI",		req.url.packpath())::
-		("SCRIPT_NAME",		cgipath)::
-		("PATH_INFO",		pathinfo)::
-		("PATH_TRANSLATED",	pathinfo)::
-		("QUERY_STRING",	query)::
-		("SERVER_ADDR",		op.lhost)::
-		("SERVER_PORT",		op.lport)::
-		("REMOTE_ADDR",		op.rhost)::
-		("REMOTE_PORT",		op.rport)::
-		("SERVER_SOFTWARE",	Version)::
-		environ;
-}
-
-scgirequest(path, scgipath: string, req: ref Req, op: ref Op, length: big): array of byte
-{
-	l := ("SCGI", "1")::cgivars(path, scgipath, req, op, length, environment);
-	s := "";
-	for(h := l; h != nil; h = tl h)
-		s += (hd h).t0+"\0"+(hd h).t1+"\0";
-	for(h = req.h.all(); h != nil; h = tl h)
-		s += cgivar((hd h).t0)+"\0"+(hd h).t1+"\0";
-	return netstring(s);
-}
-
-cgivar(s: string): string
-{
-	r := "HTTP_";
-	for(i := 0; i < len s; i++)
-		if(s[i] != '-')
-			r[len r] = s[i];
-		else
-			r[len r] = '_';
-	return str->toupper(r);
-}
-
-netstring(s: string): array of byte
-{
-	return array of byte (sprint("%d:", len s)+s+",");
+	s := sprint("%d %d %s!%s %s!%s %q %q %q %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.h.get("host"), op.req.url.path, sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg, length, op.req.h.get("user-agent"), op.req.h.get("referer"));
+	if(accessfd != nil)
+		sys->write(accessfd, d := array of byte s, len d);
+	say("accesslog: "+s);
 }
 
 suffix(suf, s: string): int
@@ -1318,12 +1361,15 @@ suffix(suf, s: string): int
 	return suf == s[len s-len suf:];
 }
 
-gettype(path: string): string
+mimetype(path: string): string
 {
-	for(i := 0; i < len types; i++)
-		if(suffix(types[i].t0, path))
-			return types[i].t1;
-	if(!has(path, '.'))
+	for(t := usertypes; t != nil; t = tl t)
+		if(suffix((hd t).t0, path))
+			return (hd t).t1;
+	for(i := 0; i < len mimetypes; i++)
+		if(suffix(mimetypes[i].t0, path))
+			return mimetypes[i].t1;
+	if(!haschar(path, '.'))
 		return "text/plain; charset=utf-8";	# for mkfile, README, etc.
 	return "application/octet-stream";
 }
@@ -1432,9 +1478,10 @@ parsehttpdate(s: string): int
 	return daytime->tm2epoch(ref Daytime->Tm(sec, min, hour, mday, mon, year-1900, 0, 0, s[1:], 0));
 }
 
-parserange(version: int, range: string, dir: Sys->Dir): (int, list of ref (big, big))
+parserange(version: int, rangehdr: (int, string), length: big): (int, list of ref (big, big))
 {
-	if(range == nil || !(version >= HTTP_11))
+	(haverange, range) := rangehdr;
+	if(!haverange || !(version >= HTTP_11))
 		return (1, nil);
 
 	if(!str->prefix("bytes", range))
@@ -1445,6 +1492,7 @@ parserange(version: int, range: string, dir: Sys->Dir): (int, list of ref (big, 
 		return (0, nil);
 	range = str->drop(range[1:], " \t");
 
+	# warning: range header parsing is fairly abstruse
 	r: list of ref (big, big);
 	valid := 0;
 	for(l := sys->tokenize(range, ",").t1; l != nil; l = tl l) {
@@ -1458,54 +1506,31 @@ parserange(version: int, range: string, dir: Sys->Dir): (int, list of ref (big, 
 				return (1, nil);
 			if(big s != big 0)
 				valid = 1;
-			i := dir.length - big s;
+			i := length - big s;
 			if(i < big 0)
 				i = big 0;
-			if(i >= dir.length)
-				i = dir.length - big 1;
-			chat(0, sprint("adding single, (%bd, %bd)", i, dir.length));
-			r = ref (i, dir.length)::r;
+			if(i >= length)
+				i = length - big 1;
+			r = ref (i, length)::r;
 		} else {
 			(first, last) := str->splitstrl(s, "-");
 			if(stripws(str->drop(first, "0-9")) != nil || last == nil || str->drop(stripws(last[1:]), "0-9") != nil)
 				return (1, nil);
 			f := big first;
-			e := dir.length;
+			e := length;
 			last = stripws(last[1:]);
 			if(last != nil)
 				e = big last+big 1;
-			if(e > dir.length)
-				e = dir.length;
+			if(e > length)
+				e = length;
 			if(f > e)
 				return (1, nil);
-			if(f < dir.length)
+			if(f < length)
 				valid = 1;
 			r = ref (f, e)::r;
-			chat(0, sprint("adding two, (%bd, %bd)", f, e));
 		}
 	}
 	return (valid, rev(r));
-}
-
-etagmatch(version: int, etag: string, etagstr: string, strong: int): int
-{
-	if(etagstr == "*")
-		return 1;
-	(l, err) := tokenizeqs(etagstr, version);
-	if(err != nil)
-		return 0;	# xxx respond with "bad request"?
-	for(; l != nil; l = tl l)
-		if(hd l == etag && (!strong || !str->prefix("W/", hd l)))
-			return 1;
-	return 0;
-}
-
-statusmsg(code: int): string
-{
-	for(i := 0; i < len statusmsgs && statusmsgs[i].t0 <= code; i++)
-		if(code == statusmsgs[i].t0)
-			return statusmsgs[i].t1;
-	raise sprint("missing status message for code %d", code);
 }
 
 strip(s, cl: string): string
@@ -1570,7 +1595,7 @@ byte2str(a: array of byte): string
 {
 	s := "";
 	for(i := 0; i < len a; i++)
-		s += sys->sprint("%02x", int a[i]);
+		s += sprint("%02x", int a[i]);
 	return s;
 }
 
@@ -1581,23 +1606,15 @@ sha1(a: array of byte): string
 	return byte2str(r);
 }
 
-listlower(l: list of string): list of string
-{
-	r: list of string;
-	for(; l != nil; l = tl l)
-		r = str->tolower(hd l)::r;
-	return rev(r);
-}
-
 listhas(l: list of string, s: string): int
 {
 	for(; l != nil; l = tl l)
-		if(hd l == s)
+		if(str->tolower(hd l) == s)
 			return 1;
 	return 0;
 }
 
-has(s: string, c: int): int
+haschar(s: string, c: int): int
 {
 	for(i := 0; i < len s; i++)
 		if(s[i] == c)
@@ -1624,18 +1641,27 @@ say(s: string)
 {
 	if(debugflag)
 		fprint(fildes(2), "%s\n", s);
-	if(errorfd != nil)
+	if(errorfd != nil && debugflag)
 		fprint(errorfd, "%s\n", s);
+}
+
+warn(id: int, s: string)
+{
+	if(debugflag)
+		fprint(fildes(2), "%d: %s\n", id, s);
+	if(errorfd != nil)
+		fprint(errorfd, "%d: %s\n", id, s);
 }
 
 chat(id: int, s: string)
 {
-	say(string id+" "+s);
+	say(string id+": "+s);
 }
 
 die(id: int, s: string)
 {
-	fail(string id+" "+s);
+	warn(id, s);
+	raise "fail:"+s;
 }
 
 fail(s: string)
@@ -1645,32 +1671,31 @@ fail(s: string)
 }
 
 
+# reading the config file
+
 Cfgs.init(file: string): (ref Cfgs, string)
 {
 	db := Db.open(file);
 	if(db == nil)
 		return (nil, sprint("db open %s: %r", file));
-	c := ref Cfgs(file, db, nil, nil, chan of (string, string, chan of (ref Cfg, string)));
+	c := ref Cfgs(file, db, nil, nil, chan of (string, string, chan of ref Cfg));
 	err := cfgsread(c);
 	if(err == nil)
 		spawn cfgserver(c);
 	return (c, err);
 }
 
-Cfgs.get(c: self ref Cfgs, host, port: string): (ref Cfg, string)
+Cfgs.lookup(c: self ref Cfgs, host, port: string): ref Cfg
 {
-	if(!vhostflag) {
-		if(c.default == nil)
-			return (nil, "no config");
-		return (c.default, nil);
-	}
-	c.getch <-= (host, port, respch := chan of (ref Cfg, string));
+	if(!vhostflag)
+		return c.default;
+	c.lookupch <-= (host, port, respch := chan of ref Cfg);
 	return <-respch;
 }
 
 cfgfind(c: ref Cfgs, host, port: string): ref Cfg
 {
-	for(l := c.configs; l != nil; l = tl l) {
+	for(l := c.cfgs; l != nil; l = tl l) {
 		(chost, cport, config) := hd l;
 		if(host == chost && port == cport)
 			return config;
@@ -1681,15 +1706,12 @@ cfgfind(c: ref Cfgs, host, port: string): ref Cfg
 cfgserver(c: ref Cfgs)
 {
 	for(;;) {
-		(host, port, respch) := <-c.getch;
+		(host, port, respch) := <-c.lookupch;
 
 		cfg := cfgfind(c, host, port);
 		if(cfg == nil)
 			cfg = c.default;
-		if(cfg == nil)
-			respch <-= (nil, "no config");
-		else
-			respch <-= (cfg, nil);
+		respch <-= cfg;
 	}
 }
 
@@ -1727,10 +1749,7 @@ cfgsread(c: ref Cfgs): string
 		mtype := e.findfirst("type");
 		if(ext == nil || mtype == nil)
 			return sprint("bad mime type, ext=%q type=%q", ext, mtype);
-		ntypes := array[len types+1] of (string, string);
-		ntypes[0] = (ext, mtype);
-		ntypes[1:] = types;
-		types = ntypes;
+		usertypes = ref (ext, mtype)::usertypes;
 	}
 	ptr = nil;
 
@@ -1759,7 +1778,7 @@ cfgsread(c: ref Cfgs): string
 		cfg.port = port;
 		if(host == nil)
 			c.default = cfg;
-		c.configs = (host, port, cfg)::c.configs;
+		c.cfgs = (host, port, cfg)::c.cfgs;
 	}
 	ptr = nil;
 
@@ -1783,7 +1802,7 @@ cfgsread(c: ref Cfgs): string
 		cfg := cfgfind(c, usehost, useport);
 		if(cfg == nil)
 			return sprint("alias references non-existing usehost=%q useport=%q", usehost, useport);
-		c.configs = (host, port, cfg)::c.configs;
+		c.cfgs = (host, port, cfg)::c.cfgs;
 	}
 	ptr = nil;
 
@@ -1792,7 +1811,7 @@ cfgsread(c: ref Cfgs): string
 
 Cfg.new(): ref Cfg
 {
-	return ref Cfg("", "80", 0, 0, nil, nil, nil, nil, nil);
+	return ref Cfg("", "80", 0, -1, nil, nil, nil, nil, nil);
 }
 
 Cfg.rev(cfg: self ref Cfg)
@@ -1856,6 +1875,8 @@ cfgread(e: ref Dbentry): (ref Cfg, string)
 				pass := tups.find("pass");
 				if(path == nil || realm == nil || user == nil || pass == nil)
 					return (nil, "missing field in auth line");
+				if(haschar((hd realm).val, '"'))
+					return (nil, "realm must not have double quote, not supported by http/1.0");
 				cfg.auths = ref ((hd path).val, (hd realm).val, base64->enc(array of byte ((hd user).val+":"+(hd pass).val)))::cfg.auths;
 			"index" =>
 				for(file := tups.find("file"); file != nil; file = tl file)

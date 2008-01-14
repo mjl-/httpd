@@ -4,7 +4,7 @@ httpd \- HTTP server
 .SH SYNOPSIS
 .B httpd
 [
-.B -dhl
+.B -dhL
 ] [
 .B -A
 .I path realm user:pass
@@ -23,6 +23,9 @@ httpd \- HTTP server
 ] [
 .B -i
 .I indexfile
+] [
+.B -l
+.I logfile
 ] [
 .B -n
 .I config
@@ -50,6 +53,7 @@ is an HTTP server that supports most of the reasonable features of contemporary 
 	* redirections based on regular expressions
 	* virtual hosting
 	* determining mimetype based on file extension
+	* "range" requests, for random access to files
 	* access and error logging
 	* configuration in attrdb format
 	* as compliant as possible, where reasonable
@@ -139,7 +143,7 @@ and
 specify which entry to use for requests instead.
 The ports may be omitted and will default to 80.
 .TP
-.B -l
+.B -L
 For directories, return a listing of files in html.
 Contents are only listed when no index file has been found, as specified with
 .BR -i .
@@ -231,6 +235,12 @@ can be specified, each being handled as
 .B -i
 .IR indexfile .
 .TP
+.BI -l " logfile"
+Write the access log to
+.IR logfile .
+For each request, the response the following is printed (as a list of quoted works, quoted as in
+.IR sh (1)):  connection id, timestamp, remote and local host and port, method, requested host, path, http version, response code, message and length, the user-agent that sent the request and the referer.
+.TP
 .BI -n " config"
 Use
 .I config
@@ -318,7 +328,7 @@ If virtual hosts are enabled, the local address is checked for each request.  If
 .PP
 SCGI protocol: http://python.ca/scgi/protocol.txt
 .SH BUGS
-Attrdb was not designed for configuration file use.  The per-host configuration attributes can not be nicely grouped as top-level entries can.
+Attrdb was not designed for configuration file use.  The per-host configuration attributes can not be nicely grouped as top-level entries can.  No line numbers are printed for errors.
 .PP
 Usernames and passwords should be read from factotum and not be sent in the clear.
 .PP
