@@ -614,7 +614,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(req.version() >= HTTP_11 && !req.h.has("host", nil))
 		return responderrmsg(op, Ebadrequest, "Bad Request: Missing header \"Host\"");
 
-	host := str->splitl(req.h.get("host"), ":").t0;
+	# when host-header is absent, we'll request the empty host name, the default
+	host := splithost(req.h.get("host")).t0;
 	op.cfg = cfg := configs.lookup(host, op.lport);
 	if(cfg == nil)
 		return responderrmsg(op, Enotfound, nil);
@@ -663,8 +664,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(!havehost) {
 		hostdir = "_default:"+cfg.port;
 	} else {
-		(hostdir, nil) = str->splitstrl(hostdir, ":");
-		if(str->drop(hostdir, "0-9a-zA-Z.-") != nil || str->splitstrl(hostdir, "..").t1 != nil)
+		(hostdir, nil) = splithost(hostdir);
+		if(str->drop(hostdir, "0-9a-zA-Z.:-") != nil || str->splitstrl(hostdir, "..").t1 != nil)
 			return responderrmsg(op, Ebadrequest, nil);
 		hostdir += ":"+cfg.port;
 	}
@@ -797,7 +798,6 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 
 pathsanitize(path: string): string
 {
-	say("path sanitize: "+path);
 	trailslash := path != nil && path[len path-1] == '/';
 
 	(nil, elems) := sys->tokenize(path, "/");
@@ -828,7 +828,7 @@ findcgi(cfg: ref Cfg, path: string): (string, string, int)
 
 etag(path: string, op: ref Op, dir: Sys->Dir): string
 {
-	host := str->splitstrl(op.req.h.get("host"), ":").t0;
+	host := splithost(op.req.h.get("host")).t0;
 	if(host == nil)
 		host = "_default";
 	return "\""+sha1(array of byte sprint("%d,%d,%s,%s,%s", dir.qid.vers, dir.mtime, host, op.lport, path))+"\"";
@@ -1352,6 +1352,19 @@ accesslog(op: ref Op)
 	if(accessfd != nil)
 		sys->write(accessfd, d := array of byte s, len d);
 	say("accesslog: "+s);
+}
+
+splithost(s: string): (string, string)
+{
+	sep := ":";	# host name or ip4, "host:port" or "ip4:host"
+	if(s != nil && s[0] == '[')	# ip6 host, "[ip6]:port"
+		sep = "]:";
+	(host, port) := str->splitstrl(s, sep);
+	if(port != nil)
+		port = port[len sep:];
+	if(sep == "]:" && host != nil && host[0] == '[' && host[len host-1] == ']')
+		host = host[1:len host-1];
+	return (host, port);
 }
 
 suffix(suf, s: string): int

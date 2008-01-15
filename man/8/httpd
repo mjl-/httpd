@@ -121,7 +121,8 @@ are served from directory
 Files in
 .I webroot
 are never served directly with
-.BR -h present.
+.B -h
+present.
 Attributes `vhost' and `novhost' enable and disable vritual hosting.
 The virtual hosts can only be specified in the configuration file.  A
 `host'
