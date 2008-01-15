@@ -107,6 +107,7 @@ credempty: string;
 ctlchan := "";
 
 environment: list of (string, string);
+cfgserverpid := -1;
 
 Httpd: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -606,6 +607,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 
 	# all values besides "close" are supposedly header names, not important
 	(contoks, conerr) := tokenize(req.h.getlist("connection"));
+	if(conerr != nil || len contoks == 0 && req.h.has("connection", nil))
+		return responderrmsg(op, Ebadrequest, sprint("Bad Request: Bad value for header \"Connection\""));
 	op.keepalive = req.version() >= HTTP_11 && conerr == nil && !listhas(contoks, "close");
 	op.resp = resp := Resp.mk(req.version(), "200", "OK", hdrs);
 
@@ -853,7 +856,7 @@ etagmatch(version: int, etag: string, etagstr: string, strong: int): int
 		return 1;
 	(l, err) := tokenizeqs(etagstr, version);
 	if(err != nil)
-		return 0;	# xxx respond with "bad request"?
+		return 0;
 	for(; l != nil; l = tl l)
 		if(hd l == etag && (!strong || !str->prefix("W/", hd l)))
 			return 1;
@@ -1425,6 +1428,7 @@ readtoken(s: string): (string, string, string)
 	return (s[:i], s[i:], nil);
 }
 
+# read list of bare tokens
 tokenize(s: string): (list of string, string)
 {
 	token, err: string;
@@ -1440,11 +1444,12 @@ tokenize(s: string): (list of string, string)
 			break;
 		if(s[0] != ',')
 			return (nil, "expected comma as separator");
-		s = str->drop(s[1:], " \t");
+		s = str->drop(s, ", \t");
 	}
 	return (rev(l), nil);
 }
 
+# read double quoted token in header.
 # for http/1.1 a backslash may be used for escaping, not for http/1.0
 readqs(s: string, v: int): (string, string, string)
 {
@@ -1466,6 +1471,7 @@ readqs(s: string, v: int): (string, string, string)
 	return (nil, nil, "quoted string not ended");
 }
 
+# read list of double-quoted strings
 tokenizeqs(s: string, v: int): (list of string, string)
 {
 	r: list of string;
@@ -1481,7 +1487,7 @@ tokenizeqs(s: string, v: int): (list of string, string)
 			break;
 		if(s[0] != ',')
 			return (nil, "expected comma as separator");
-		s = str->drop(s[1:], " \t");
+		s = str->drop(s, ", \t");
 	}
 	return (rev(r), nil);
 }
@@ -1492,6 +1498,7 @@ parsehttpdate(s: string): int
 {
 	mday, mon, year, hour, min, sec: int;
 
+	# sys-tokenize allows too much whitespace, but well...
 	(n, tokens) := sys->tokenize(s, " ");
 	if(n != 6 || len hd tokens != 4 || (hd tokens)[3] != ',' || index(days, (hd tokens)[:3]) < 0)
 		return 0;
@@ -1706,11 +1713,15 @@ Cfgs.init(file: string): (ref Cfgs, string)
 {
 	db := Db.open(file);
 	if(db == nil)
-		return (nil, sprint("db open %s: %r", file));
+		return (nil, sprint("open config %q: %r", file));
 	c := ref Cfgs(file, db, nil, nil, chan of (string, string, chan of ref Cfg), nil);
 	err := cfgsread(c);
-	if(err == nil)
-		spawn cfgserver(c);
+	if(err == nil) {
+		if(cfgserverpid >= 0)
+			kill(cfgserverpid);
+		spawn cfgserver(c, pidch := chan of int);
+		cfgserverpid = <-pidch;
+	}
 	return (c, err);
 }
 
@@ -1732,11 +1743,11 @@ cfgfind(c: ref Cfgs, host, port: string): ref Cfg
 	return nil;
 }
 
-cfgserver(c: ref Cfgs)
+cfgserver(c: ref Cfgs, pidch: chan of int)
 {
+	pidch <-= sys->pctl(0, nil);
 	for(;;) {
 		(host, port, respch) := <-c.lookupch;
-
 		cfg := cfgfind(c, host, port);
 		if(cfg == nil)
 			cfg = c.default;
@@ -1746,6 +1757,9 @@ cfgserver(c: ref Cfgs)
 
 cfgsread(c: ref Cfgs): string
 {
+	nusertypes := usertypes;
+	nusertypes = nil;
+
 	e: ref Dbentry; 
 	(e, nil) = c.db.find(nil, "vhost");
 	if(e != nil)
@@ -1785,7 +1799,7 @@ cfgsread(c: ref Cfgs): string
 		mtype := e.findfirst("type");
 		if(ext == nil || mtype == nil)
 			return sprint("bad mime type, ext=%q type=%q", ext, mtype);
-		usertypes = ref (ext, mtype)::usertypes;
+		nusertypes = ref (ext, mtype)::nusertypes;
 	}
 	ptr = nil;
 
@@ -1805,13 +1819,13 @@ cfgsread(c: ref Cfgs): string
 			break;
 		host := e.findfirst("host");
 		port := e.findfirst("port");
-		if(port == "")
+		if(port == nil)
 			port = "80";
 		(cfg, err) := cfgread(e);
 		if(err != nil)
 			return err;
 		cfg.host = host;
-		cfg.port = port;
+		cfg.port = string int port;
 		if(host == nil)
 			c.default = cfg;
 		c.cfgs = (host, port, cfg)::c.cfgs;
@@ -1835,10 +1849,10 @@ cfgsread(c: ref Cfgs): string
 			useport = port;
 		if(usehost == host && useport == port)
 			return "alias line aliases host and port to itself, ignoring";
-		cfg := cfgfind(c, usehost, useport);
+		cfg := cfgfind(c, usehost, string int useport);
 		if(cfg == nil)
 			return sprint("alias references non-existing usehost=%q useport=%q", usehost, useport);
-		c.cfgs = (host, port, cfg)::c.cfgs;
+		c.cfgs = (host, string int port, cfg)::c.cfgs;
 	}
 	ptr = nil;
 
@@ -1850,6 +1864,7 @@ cfgsread(c: ref Cfgs): string
 		sys->seek(naccessfd, big 0, Sys->SEEKEND);
 	}
 	accessfd = naccessfd;
+	usertypes = rev(nusertypes);
 
 	return nil;
 }
@@ -1877,9 +1892,12 @@ cfgread(e: ref Dbentry): (ref Cfg, string)
 			for(attrs := (hd r).t1; attrs != nil; attrs = tl attrs) {
 				val := (hd attrs).val;
 				case (hd attrs).attr {
-				"listings" =>	cfg.listings = 1;
-				"cachesecs" =>	cfg.cachesecs = int val;
-				* =>	warn(0, sprint("ignoring config attribute %q", (hd attrs).attr));
+				"listings" =>
+					cfg.listings = 1;
+				"cachesecs" =>
+					cfg.cachesecs = int val;
+				* =>
+					warn(0, sprint("ignoring config attribute %q", (hd attrs).attr));
 				}
 			}
 		}
@@ -1889,7 +1907,6 @@ cfgread(e: ref Dbentry): (ref Cfg, string)
 		attr := hd l;
 		for(r := e.find(attr); r != nil; r = tl r) {
 			(tups, nil) := hd r;
-			
 			case attr {
 			"listen" =>
 				ip := tups.find("ip");
@@ -1919,7 +1936,7 @@ cfgread(e: ref Dbentry): (ref Cfg, string)
 				user := tups.find("user");
 				pass := tups.find("pass");
 				if(path == nil || realm == nil || user == nil || pass == nil)
-					return (nil, "missing field in auth line");
+					return (nil, "missing field in auth line, need path, realm, user and pass");
 				if(haschar((hd realm).val, '"'))
 					return (nil, "realm must not have double quote, not supported by http/1.0");
 				cfg.auths = ref ((hd path).val, (hd realm).val, base64->enc(array of byte ((hd user).val+":"+(hd pass).val)))::cfg.auths;
@@ -1986,7 +2003,7 @@ Repl.apply(r: self ref Repl, s: string): (int, string, string)
 	if(m == nil)
 		return (0, nil, nil);
 	if(r.maxrepl > len m-1)
-		return (0, nil, "replacement group too high for regular expression");
+		return (0, nil, "replacement group not in groups in regular expression");
 	res := "";
 	for(rl := r.rule; rl != nil; rl = tl rl) {
 		(part, index) := *(hd rl);

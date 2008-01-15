@@ -27,7 +27,6 @@ testing:
 - write events to error log:  started, reloaded
 
 todo:
-- better messages in errorlog
 - read through code and mention important semantics in manual page
 - for some errors, e.g. "range not satisfiable", we must not set the etag?
 
