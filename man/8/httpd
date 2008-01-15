@@ -118,6 +118,8 @@ to TCP
 .I port
 are served from directory
 .IR webroot/host:port .
+If no host has been specified, e.g. for http/1.0, `_default' is used as host in the path.
+Note that the port is not taken from the `host'-header, but always from the local port of the connection.
 Files in
 .I webroot
 are never served directly with
@@ -340,4 +342,10 @@ Usernames and passwords should be read from factotum and not be sent in the clea
 .PP
 See README.
 .PP
-XXX Mention HTTP specification inconsistencies and why some requirements are not adhered to.
+Incompatibilities with the rfcs:
+.br
+- If the `host'-header references a non-existing domain name and virtual hosting is enabled,
+.I httpd
+responds with `404 Object Not Found', instead of the rfc2626-required `400 Bad Request'.
+.br
+- For http/1.0 requests, the `host'-header is also used.

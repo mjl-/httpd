@@ -320,7 +320,9 @@ init(nil: ref Draw->Context, args: list of string)
 
 	environment = env->getall();
 
-	sys->pctl(Sys->FORKNS|Sys->FORKENV|Sys->FORKFD, nil);
+	pid := sys->pctl(Sys->FORKNS|Sys->FORKENV|Sys->FORKFD, nil);
+	if(pid < 0)
+		fail(sprint("pctl: %r"));
 	if(sys->chdir(webroot) != 0)
 		fail(sprint("chdir webroot %q: %r", webroot));
 
@@ -544,6 +546,8 @@ httpserve(fd: ref Sys->FD, conndir: string)
 	say(id, sprint("connect from %s:%s to %s:%s", rhost, rport, lhost, lport));
 
 	pid := sys->pctl(Sys->NEWPGRP|Sys->FORKNS|Sys->NODEVS, nil);
+	if(pid < 0)
+		die(id, sprint("pctl: %r"));
 	excch <-= (pid, nil);
 	if(sys->bind(webroot,  "/", Sys->MREPL) < 0)
 		die(id, sprint("bind %q /: %r", webroot));
@@ -736,6 +740,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		timeo := Cgitimeoutsecs*1000;
 		spawn timeout(op, timeo, timeoch := chan of int, donech := chan of int);
 		timeopid := <- timeoch;
+		if(timeopid < 0)
+			die(op.id, "timeout proc failed");
 		spawn cgi(path, op, cgipath, cgiaction, cgitype, timeopid, timeoch, donech);
 		<-donech;
 		return;
@@ -1010,10 +1016,14 @@ pathurls(s: string): string
 
 timeout(op: ref Op, timeo: int, timeoch, donech: chan of int)
 {
-	timeoch <-= sys->pctl(Sys->NEWPGRP, nil);
+	pid := sys->pctl(Sys->NEWPGRP, nil);
+	timeoch <-= pid;
+	if(pid < 0)
+		return warn(op.id, sprint("pctl: %r"));
+		
 	opid := <-timeoch;
 	sys->sleep(timeo);
-	if(debugflag) say(op.id, sprint("timeout %d ms for request, killing handler pid %d, timeopid %d", timeo, opid, sys->pctl(0, nil)));
+	if(debugflag) say(op.id, sprint("timeout %d ms for request, killing handler pid %d, timeopid %d", timeo, opid, pid));
 	killch <-= opid;
 	responderrmsg(op, Eservererror, "Response could not be generated in time.");
 	donech <-= 0;
@@ -1051,7 +1061,8 @@ cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: int
 
 _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: int, cgich: chan of int)
 {
-	cgich <-= sys->pctl(0, nil);
+	pid := sys->pctl(0, nil);
+	cgich <-= pid;
 
 	id := op.id;
 	req := op.req;
@@ -1096,7 +1107,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 		if(debugflag) say(id, sprint("post, client content-length %bd", length));
 	}
 
-	if(debugflag) say(id, sprint("handling cgi request, cgipath %q cgiaction %q cgitype %s, pid %d timeopid %d", cgipath, cgiaction, cgitypes[cgitype], sys->pctl(0, nil), timeopid));
+	if(debugflag) say(id, sprint("handling cgi request, cgipath %q cgiaction %q cgitype %s, pid %d timeopid %d", cgipath, cgiaction, cgitypes[cgitype], pid, timeopid));
 
 	fd0, fd1: ref Sys->FD;
 	if(cgitype == Scgi) {
