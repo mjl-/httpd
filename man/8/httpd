@@ -187,6 +187,8 @@ and listen for incoming connection.
 The global configuration attribute is
 `announce',
 the value is the address to listen on.
+For a reload of the configuration attributes, the announce-addresses are ignored.  To announce to a different set of ports, restart
+.IR httpd .
 .TP
 .BI -c " path command"
 Handle requests for
@@ -240,7 +242,9 @@ can be specified, each being handled as
 Write the access log to
 .IR logfile .
 For each request, the response the following is printed (as a list of quoted works, quoted as in
-.IR sh (1)):  connection id, timestamp, remote and local host and port, method, requested host, path, http version, response code, message and length, the user-agent that sent the request and the referer.
+.IR sh (1)):  connection id, timestamp, remote and local host and port, method, requested host (from `host'-header), path, http version, response code, message and length, the user-agent that sent the request and the referer.
+The global configuration attribute is
+`accesslog'.  The file is also reopened on a reload of the configuration file.
 .TP
 .BI -n " config"
 Use
@@ -256,7 +260,8 @@ overrides the current configuration, command-line options specified before
 are effectively ignored.  Options specified after
 .B -n
 are used for the `default' host.
-There is no equivalent for the configuration file.
+There is no equivalent for the configuration file.  Be sure to use full path names on the command-line if you want reloads to work, see option
+.BR -f .
 .TP
 .BI -r " pathre dest"
 Redirect requests to regular expression
