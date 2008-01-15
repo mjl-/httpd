@@ -58,6 +58,7 @@ Cfgs: adt {
 	default:	ref Cfg;
 	cfgs:	list of (string, string, ref Cfg);	# host, port, config
 	lookupch:	chan of (string, string, chan of ref Cfg);
+	logfile:	string;
 
 	init:	fn(file: string): (ref Cfgs, string);
 	lookup:	fn(c: self ref Cfgs, host, port: string): ref Cfg;
@@ -104,7 +105,6 @@ addrs: list of string;
 webroot := "";
 credempty: string;
 ctlchan := "";
-logfile := "";
 
 environment: list of (string, string);
 
@@ -283,7 +283,12 @@ init(nil: ref Draw->Context, args: list of string)
 		'f' =>	ctlchan = arg->earg();
 		'h' =>	vhostflag++;
 		'i' =>	defcfg.indexfiles = arg->earg()::defcfg.indexfiles;
-		'l' =>	logfile = arg->earg();
+		'l' =>	configs.logfile = arg->earg();
+			accessfd = sys->open(configs.logfile, Sys->OWRITE);
+			if(accessfd == nil)
+				fail(sprint("open %q: %r", configs.logfile));
+			sys->seek(accessfd, big 0, Sys->SEEKEND);
+
 		'n' =>
 			file := arg->earg();
 			(configs, err) = Cfgs.init(file);
@@ -315,16 +320,16 @@ init(nil: ref Draw->Context, args: list of string)
 
 	environment = env->getall();
 
+	sys->pctl(Sys->FORKNS|Sys->FORKENV|Sys->FORKFD, nil);
+	if(sys->chdir(webroot) != 0)
+		fail(sprint("chdir webroot %q: %r", webroot));
+
 	if(ctlchan != nil) {
 		fio := sys->file2chan("/chan", ctlchan);
 		if(fio == nil)
 			fail(sprint("file2chan in /chan: %q: %r", ctlchan));
 		spawn ctlhandler(fio);
 	}
-
-	sys->pctl(Sys->FORKNS|Sys->FORKENV|Sys->FORKFD, nil);
-	if(sys->chdir(webroot) != 0)
-		fail(sprint("chdir webroot %q: %r", webroot));
 
 	timefd = sys->open("/dev/time", Sys->OREAD);
 	if(timefd == nil)
@@ -333,11 +338,6 @@ init(nil: ref Draw->Context, args: list of string)
 	errorfd = sys->open("/services/logs/httpderror", Sys->OWRITE);
 	if(errorfd != nil)
 		sys->seek(errorfd, big 0, Sys->SEEKEND);
-
-	if(logfile != nil)
-		accessfd = sys->open("/services/logs/httpdaccess", Sys->OWRITE);
-	if(accessfd != nil)
-		sys->seek(accessfd, big 0, Sys->SEEKEND);
 
 	idch = chan[8] of int;
 	spawn idgen();
@@ -359,6 +359,7 @@ init(nil: ref Draw->Context, args: list of string)
 		addrs = defaddr::nil;
 	for(addrs = rev(addrs); addrs != nil; addrs = tl addrs)
 		spawn announce(hd addrs);
+	warn(0, sprint("httpd started at %s", daytime->time()));
 }
 
 announce(addr: string)
@@ -366,7 +367,7 @@ announce(addr: string)
 	(aok, aconn) := sys->announce(addr);
 	if(aok != 0)
 		fail(sprint("announce %q: %r", addr));
-	say(sprint("announed to %q", addr));
+	say(0, sprint("announed to %q", addr));
 	for(;;) {
 		(lok, lconn) := sys->listen(aconn);
 		if(lok != 0)
@@ -375,14 +376,14 @@ announce(addr: string)
 		if(dfd != nil)
 			spawn httpserve(dfd, lconn.dir);
 		else
-			say(sprint("open connection file: %r"));
+			warn(0, sprint("open connection file: %r"));
 		lconn.dfd = nil;
 	}
 }
 
 idgen()
 {
-	id := 0;
+	id := 1;
 	for(;;)
 		idch <-= id++;
 }
@@ -419,7 +420,7 @@ exceptsetter()
 		if(fd == nil || fprint(fd, "exceptions notifyleader") == -1)
 			err = sprint("setting exception handling for pid %d: %r", pid);
 		if(respch == nil && err != nil) {
-			warn(-1, sprint("setting exceptions notifyleader for pid %d: %s", pid, err));
+			warn(0, sprint("setting exceptions notifyleader for pid %d: %s", pid, err));
 			kill(pid);
 		}
 		if(respch != nil)
@@ -512,17 +513,18 @@ ctlhandler(fio: ref Sys->FileIO)
 		"reload" =>
 			if(configs.db.reopen() != 0) {
 				msg := sprint("reopening config file: %r");
-				say(msg);
+				warn(0, msg);
 				wc <-= (0, msg);
 				continue;
 			}
 			err := cfgsread(configs);
 			if(err != nil) {
 				msg := "error reloading config, keeping current: "+err;
-				say(msg);
+				warn(0, msg);
 				wc <-= (0, msg);
 				continue;
 			}
+			warn(0, "config file reloaded");
 			wc <-= (len data, nil);
 		* =>
 			wc <-= (0, sprint("bad command: %q", s));
@@ -533,13 +535,13 @@ ctlhandler(fio: ref Sys->FileIO)
 httpserve(fd: ref Sys->FD, conndir: string)
 {
 	id := <-idch;
-	chat(id, "httpserve");
+	say(id, "httpserve");
 
 	(lhost, lport) := readaddr(id, conndir+"/local");
 	(rhost, rport) := readaddr(id, conndir+"/remote");
 	lhost = IPaddr.parse(lhost).t1.text();
 	rhost = IPaddr.parse(rhost).t1.text();
-	chat(id, sprint("connect from %s:%s to %s:%s", rhost, rport, lhost, lport));
+	say(id, sprint("connect from %s:%s to %s:%s", rhost, rport, lhost, lport));
 
 	pid := sys->pctl(Sys->NEWPGRP|Sys->FORKNS|Sys->NODEVS, nil);
 	excch <-= (pid, nil);
@@ -595,7 +597,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		die(id, sprint("unsupported http version, HTTP/%d.%d", req.major, req.minor));
 	}
 	killch <-= killpid;
-	chat(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), sprint("HTTP/%d.%d", req.major, req.minor)));
+	say(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), sprint("HTTP/%d.%d", req.major, req.minor)));
 	op.req = req;
 
 	# all values besides "close" are supposedly header names, not important
@@ -628,7 +630,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 			addrokay = chost == op.lhost && cport == op.lport;
 		}
 		if(!addrokay) {
-			chat(id, "request on ip:port, not allowed");
+			say(id, "request on ip:port, not allowed");
 			return responderrmsg(op, Enotfound, nil);
 		}
 	}
@@ -675,6 +677,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		if(havehost && sys->chdir(hostdir) != 0)
 			return responderrmsg(op, Enotfound, nil);
 	}
+	if(debugflag) say(id, sprint("using hostdir %q, path %q", hostdir, path));
 
 	validauth := needauth := 0;
 	realm: string;
@@ -700,12 +703,13 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		resp.h.add("www-authenticate", sprint("Basic realm=\"authentication not allowed\""));
 		return responderrmsg(op, Eunauthorized, "Sending authorization credentials is not allowed for this resource.  Please use an empty username and password or do not send authorization credentials altogether.");
 	}
+	if(debugflag && validauth) say(id, "have valid auth credentials");
 
 	for(r := cfg.redirs; r != nil; r = tl r) {
 		repl := hd r;
 		(match, dest, replerr) := repl.apply(path);
 		if(replerr != nil) {
-			chat(id, "redirections misconfiguration: "+replerr);
+			say(id, "redirections misconfiguration: "+replerr);
 			return responderrmsg(op, Eservererror, "An error occurred while handling a redirection");
 		}
 		if(!match)
@@ -720,6 +724,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 				dest = "http://"+op.lhost+lport+dest;
 			}
 		}
+		if(debugflag) say(id, sprint("redirecting from %q to %q", path, dest));
 		resp.h.set("location", dest);
 		dest = htmlescape(dest);
 		return responderrmsg(op, Emovedpermanently, sprint("Moved Permanently: moved to <a href=\"%s\">%s</a>", dest, dest));
@@ -727,6 +732,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 
 	# if path is cgi-handled, let cgi() handle the request
 	if(((cgipath, cgiaction, cgitype) := findcgi(cfg, path)).t1 != nil) {
+		if(debugflag) say(id, sprint("passing to (s)cgi handler, cgipath %q cgiaction %q", cgipath, cgiaction));
 		timeo := Cgitimeoutsecs*1000;
 		spawn timeout(op, timeo, timeoch := chan of int, donech := chan of int);
 		timeopid := <- timeoch;
@@ -748,6 +754,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 			ifd := sys->open(ipath, Sys->OREAD);
 			if(ifd == nil)
 				return responderrmsg(op, Enotfound, nil);
+			if(debugflag) say(id, sprint("using index file %q", hd l));
 			dfd = ifd;
 			dir = idir;
 			path += hd l;
@@ -853,7 +860,7 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 	req := op.req;
 	resp := op.resp;
 
-	chat(id, "doing plain file");
+	if(debugflag) say(id, "doing plain file");
 	ct := mimetype(path);
 	resp.h.add("content-type", ct);
 	op.length = dir.length;
@@ -880,6 +887,7 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 		}
 		resp.st = string Epartialcontent;
 		resp.stmsg = "Partial Content";
+		if(debugflag) say(id, sprint("sending %d ranges for multipart/byterange response", len ranges));
 	} else
 		ranges = ref (big 0, dir.length)::nil;
 
@@ -923,7 +931,7 @@ listdir(path: string, op: ref Op, dfd: ref Sys->FD)
 	req := op.req;
 	resp := op.resp;
 
-	chat(id, "doing directory listing");
+	if(debugflag) say(id, "doing directory listing");
 	resp.h.add("content-type", "text/html; charset=utf-8");
 	op.chunked = resp.version() >= HTTP_11;
 
@@ -1005,7 +1013,7 @@ timeout(op: ref Op, timeo: int, timeoch, donech: chan of int)
 	timeoch <-= sys->pctl(Sys->NEWPGRP, nil);
 	opid := <-timeoch;
 	sys->sleep(timeo);
-	chat(op.id, sprint("timeout %d ms for request, killing handler pid %d, timeopid %d", timeo, opid, sys->pctl(0, nil)));
+	if(debugflag) say(op.id, sprint("timeout %d ms for request, killing handler pid %d, timeopid %d", timeo, opid, sys->pctl(0, nil)));
 	killch <-= opid;
 	responderrmsg(op, Eservererror, "Response could not be generated in time.");
 	donech <-= 0;
@@ -1020,7 +1028,7 @@ cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: int
 	npid := sys->pctl(Sys->NEWPGRP, nil);
 	if(npid < 0) {
 		killch <-= timeopid;
-		chat(op.id, sprint("pctl newpgr: %r"));
+		warn(op.id, sprint("pctl newpgr: %r"));
 		responderrmsg(op, Eservererror, nil);
 		donech <-= 0;
 		return;
@@ -1029,7 +1037,7 @@ cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: int
 	err := <-respch;
 	if(err != nil) {
 		killch <-= timeopid;
-		chat(op.id, sprint("setting exception notify leader: %s", err));
+		warn(op.id, sprint("setting exception notify leader: %s", err));
 		responderrmsg(op, Eservererror, nil);
 	} else {
 		# catch exceptions (e.g. when writing to remote fails), to make sure our caller can return
@@ -1085,10 +1093,10 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 			fprint(op.fd, "HTTP/1.1 100 Continue\r\n\r\n");
 		}
 
-		chat(id, sprint("post, client content-length %bd", length));
+		if(debugflag) say(id, sprint("post, client content-length %bd", length));
 	}
 
-	chat(id, sprint("handling cgi request, cgipath %q cgiaction %q cgitype %s, pid %d timeopid %d", cgipath, cgiaction, cgitypes[cgitype], sys->pctl(0, nil), timeopid));
+	if(debugflag) say(id, sprint("handling cgi request, cgipath %q cgiaction %q cgitype %s, pid %d timeopid %d", cgipath, cgiaction, cgitypes[cgitype], sys->pctl(0, nil), timeopid));
 
 	fd0, fd1: ref Sys->FD;
 	if(cgitype == Scgi) {
@@ -1101,7 +1109,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 
 		sreq := scgirequest(path, cgipath, req, op, length);
 		if(sys->write(sfd, sreq, len sreq) != len sreq) {
-			chat(id, sprint("write scgi request: %r"));
+			warn(id, sprint("write scgi request: %r"));
 			return responderrmsg(op, Eservererror, nil);
 		}
 		fd0 = fd1 = sfd;
@@ -1110,7 +1118,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 		cgispawnch <-= (cgiaction, path, cgipath, op, length, replych := chan of (ref Sys->FD, ref Sys->FD, string));
 		(fd0, fd1, err) = <-replych;
 		if(err != nil) {
-			chat(id, "cgispawn: "+err);
+			warn(id, "cgispawn: "+err);
 			return responderrmsg(op, Eservererror, nil);
 		}
 	}
@@ -1120,14 +1128,14 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 
 	sb := bufio->fopen(fd1, Bufio->OREAD);
 	if(sb == nil) {
-		chat(id, sprint("bufio fopen cgi fd: %r"));
+		warn(id, sprint("bufio fopen cgi fd: %r"));
 		return responderrmsg(op, Eservererror, nil);
 	}
 
 	l := sb.gets('\n');
 	killch <-= timeopid;
 	if(!str->prefix("status:", str->tolower(l))) {
-		chat(id, "bad cgi response line: "+l);
+		warn(id, "bad cgi response line: "+l);
 		return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
 	}
 	l = str->drop(l[len "status:":], " \t");
@@ -1135,20 +1143,20 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 	if(resp.stmsg != nil)
 		resp.stmsg = droptl(resp.stmsg[1:], " \t\r\n");
 	if(len resp.st != 3 || str->drop(resp.st, "0-9") != "") {
-		chat(id, "bad cgi response line: "+l);
+		warn(id, "bad cgi response line: "+l);
 		return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
 	}
 
 	(hdrs, rerr) := Hdrs.read(sb);
 	if(rerr != nil) {
-		chat(id, "reading cgi headers: "+rerr);
+		warn(id, "reading cgi headers: "+rerr);
 		return responderrmsg(op, Eservererror, "Internal Server Error:  Error reading headers from handler");
 	}
 	elength := big -1;
 	if(hdrs.has("content-length", nil)) {
 		elengthstr := hdrs.get("content-length");
 		if(elengthstr == nil || str->drop(elengthstr, "0-9") != "") {
-			chat(id, "bad cgi content-length header: "+elengthstr);
+			warn(id, "bad cgi content-length header: "+elengthstr);
 			return responderrmsg(op, Eservererror, "Internal Server Error:  Invalid content-length from handler");
 		}
 		op.length = elength = big elengthstr;
@@ -1161,7 +1169,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 	op.chunked = elength == big -1 && resp.version() >= HTTP_11;
 	rerr = hresp(resp, op.fd, op.keepalive, op.chunked);
 	if(rerr != nil) {
-		chat(id, "writing response: "+rerr);
+		warn(id, "writing response: "+rerr);
 		return;
 	}
 
@@ -1185,7 +1193,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 		hwrite(op, d[:n]);
 	}
 	hwriteeof(op);
-	chat(id, "request done");
+	if(debugflag) say(id, "request done");
 }
 
 cgifunnel(b: ref Iobuf, sfd: ref Sys->FD, length: big)
@@ -1348,10 +1356,10 @@ accesslog(op: ref Op)
 	if(!op.chunked && op.length >= big 0)
 		length = string op.length;
 
-	s := sprint("%d %d %s!%s %s!%s %q %q %q %q %q %q %q %q %q\n", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.h.get("host"), op.req.url.path, sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg, length, op.req.h.get("user-agent"), op.req.h.get("referer"));
+	s := sprint("%d %d %s!%s %s!%s %q %q %q %q %q %q %q %q %q", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.h.get("host"), op.req.url.path, sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg, length, op.req.h.get("user-agent"), op.req.h.get("referer"));
 	if(accessfd != nil)
-		sys->write(accessfd, d := array of byte s, len d);
-	say("accesslog: "+s);
+		fprint(accessfd, "%s\n", s);
+	if(debugflag) say(op.id, "accesslog: "+s);
 }
 
 splithost(s: string): (string, string)
@@ -1650,25 +1658,22 @@ kill(pid: int)
 		fprint(fd, "kill");
 }
 
-say(s: string)
+say(id:int, s: string)
 {
+	msec := sys->millisec();
 	if(debugflag)
-		fprint(fildes(2), "%s\n", s);
-	if(errorfd != nil && debugflag)
-		fprint(errorfd, "%s\n", s);
+		fprint(fildes(2), "%d %d, %s\n", msec, id, s);
+	if(debugflag && errorfd != nil)
+		fprint(errorfd, "%d %d, %s\n", msec, id, s);
 }
 
 warn(id: int, s: string)
 {
+	msec := sys->millisec();
 	if(debugflag)
-		fprint(fildes(2), "%d: %s\n", id, s);
+		fprint(fildes(2), "%d %d, %s\n", msec, id, s);
 	if(errorfd != nil)
-		fprint(errorfd, "%d: %s\n", id, s);
-}
-
-chat(id: int, s: string)
-{
-	say(string id+": "+s);
+		fprint(errorfd, "%d %d, %s\n", msec, id, s);
 }
 
 die(id: int, s: string)
@@ -1691,7 +1696,7 @@ Cfgs.init(file: string): (ref Cfgs, string)
 	db := Db.open(file);
 	if(db == nil)
 		return (nil, sprint("db open %s: %r", file));
-	c := ref Cfgs(file, db, nil, nil, chan of (string, string, chan of ref Cfg));
+	c := ref Cfgs(file, db, nil, nil, chan of (string, string, chan of ref Cfg), nil);
 	err := cfgsread(c);
 	if(err == nil)
 		spawn cfgserver(c);
@@ -1750,6 +1755,13 @@ cfgsread(c: ref Cfgs): string
 		s := e.findfirst("ctlchan");
 		if(s != nil)
 			ctlchan = s;
+	}
+
+	(e, nil) = c.db.find(nil, "accesslog");
+	if(e != nil) {
+		s := e.findfirst("accesslog");
+		if(s != nil)
+			c.logfile = s;
 	}
 
 	ptr: ref Attrdb->Dbptr;
@@ -1819,6 +1831,15 @@ cfgsread(c: ref Cfgs): string
 	}
 	ptr = nil;
 
+	naccessfd: ref Sys->FD;
+	if(c.logfile != nil) {
+		naccessfd = sys->open(c.logfile, Sys->OWRITE);
+		if(naccessfd == nil)
+			return sprint("open logfile %q: %r", c.logfile);
+		sys->seek(naccessfd, big 0, Sys->SEEKEND);
+	}
+	accessfd = naccessfd;
+
 	return nil;
 }
 
@@ -1847,7 +1868,7 @@ cfgread(e: ref Dbentry): (ref Cfg, string)
 				case (hd attrs).attr {
 				"listings" =>	cfg.listings = 1;
 				"cachesecs" =>	cfg.cachesecs = int val;
-				* =>	say(sprint("ignoring config attribute %q", (hd attrs).attr));
+				* =>	warn(0, sprint("ignoring config attribute %q", (hd attrs).attr));
 				}
 			}
 		}

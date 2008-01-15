@@ -23,10 +23,11 @@ testing:
 - redirects based on path rewriting?
 - accesslog optional
 - find rfc that handles ip6 addresses in host-header, and understand them with port
+- "accesslog" in config file, and reloading works
+- write events to error log:  started, reloaded
 
 todo:
 - better messages in errorlog
-- write events to error log:  started, reloaded
 - read through code and mention important semantics in manual page
 - for some errors, e.g. "range not satisfiable", we must not set the etag?
 
