@@ -742,7 +742,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 			continue;
 		if(!str->prefix("http:", dest)) {
 			if(havehost)
-				dest = "http://"+host+dest;
+				dest = "http://"+req.h.get("host")+dest;
 			else {
 				lport := "";
 				if(op.lport != "80")
