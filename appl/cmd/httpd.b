@@ -100,7 +100,7 @@ Cgitimeoutsecs: con 3*60;
 Keepalivesecs: con 3*60;
 
 debugflag, vhostflag: int;
-defaddr := "net!*!8000";
+defaddr := "net!*!http";
 addrs: list of string;
 webroot := "";
 credempty: string;
@@ -538,13 +538,13 @@ ctlhandler(fio: ref Sys->FileIO)
 httpserve(fd: ref Sys->FD, conndir: string)
 {
 	id := <-idch;
-	say(id, "httpserve");
+	if(debugflag) say(id, "httpserve");
 
 	(lhost, lport) := readaddr(id, conndir+"/local");
 	(rhost, rport) := readaddr(id, conndir+"/remote");
 	lhost = IPaddr.parse(lhost).t1.text();
 	rhost = IPaddr.parse(rhost).t1.text();
-	say(id, sprint("connect from %s:%s to %s:%s", rhost, rport, lhost, lport));
+	if(debugflag) say(id, sprint("connect from %s:%s to %s:%s", rhost, rport, lhost, lport));
 
 	pid := sys->pctl(Sys->NEWPGRP|Sys->FORKNS|Sys->NODEVS, nil);
 	if(pid < 0)
@@ -602,7 +602,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		die(id, sprint("unsupported http version, HTTP/%d.%d", req.major, req.minor));
 	}
 	killch <-= killpid;
-	say(id, sprint("request: method %q url %q version %q", http->methodstr(req.method), req.url.pack(), sprint("HTTP/%d.%d", req.major, req.minor)));
+	if(debugflag) say(id, sprint("request: method %q url %q version %q",
+		http->methodstr(req.method), req.url.pack(), sprint("HTTP/%d.%d", req.major, req.minor)));
 	op.req = req;
 
 	# all values besides "close" are supposedly header names, not important
@@ -650,7 +651,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		return responderrmsg(op, Eok, req.pack());
 
 	OPTIONS =>
-		# xxx should be based on path
+		# only (s)cgi paths allow POST, but we won't say, the path may require auth as well.  what to do then?
 		hdrs.add("allow", "OPTIONS, GET, HEAD, POST, TRACE");
 		hdrs.add("accept-ranges", "bytes");
 		return responderrmsg(op, Eok, nil);
@@ -716,7 +717,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		repl := hd r;
 		(match, dest, replerr) := repl.apply(path);
 		if(replerr != nil) {
-			say(id, "redirections misconfiguration: "+replerr);
+			warn(id, "redirections misconfiguration: "+replerr);
 			return responderrmsg(op, Eservererror, "An error occurred while handling a redirection");
 		}
 		if(!match)

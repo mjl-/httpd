@@ -251,6 +251,8 @@ a cache is only allowed to combine range requests if the etag is strongly equiva
 
 the whole idea of using timestamps with second-precision for caching isn't great.  the way the timestamp is specified is even more ridiculous.  the fact that entities can be conditionally retrieved based on the timestamp is even more silly given that etags are so much more useful for that.
 
+an `OPTIONS` request wants to know which methods are allowed on an object.  to determine this, we may need authorization credentials.  otherwise we might be giving away information the client is not allowed to know.  and besides, it sounds pretty bloaty...  so instead, we'll just say we support POST on everything, as if `*` was specified for path.  also, it seems `OPTIONS` is somewhwat underspecified.  e.g., what to do when the path does not exist?  lastly, no one seems to use `OPTIONS`, so we really do not care enough.
+
 # on http/1.0 compatibility
 
 xxx to write
