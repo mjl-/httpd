@@ -84,12 +84,13 @@ vhost
 #novhost
 ctlchan=httpd
 accesslog=/services/logs/httpdaccess
-announce=tcp!www.example.com!80
+announce=net!www.example.com!80
 
 mime    ext=.text       type='text/plain; charset=utf-8'
 mime    ext=.mov        type='video/quicktime'
 mime    ext=.erl        type='text/plain; charset=utf-8'
 
+# port=80 is not necessary, it's the default
 host=www.example.com port=80
         listings
         cachesecs=60

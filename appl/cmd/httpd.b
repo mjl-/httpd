@@ -228,6 +228,7 @@ randch: chan of int;
 killch: chan of int;
 killschedch: chan of (int, int, chan of int);
 excch: chan of (int, chan of string);
+warnch: chan of (int, string);
 
 timefd: ref Sys->FD;
 errorfd: ref Sys->FD;
@@ -351,6 +352,8 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn killer();
 	excch = chan of (int, chan of string);
 	spawn exceptsetter();
+	warnch = chan of (int, string);
+	spawn warner();
 
 	cgispawnch = chan of (string, string, string, ref Op, big, chan of (ref Sys->FD, ref Sys->FD, string));
 	spawn cgispawner();
@@ -431,6 +434,16 @@ exceptsetter()
 	}
 }
 
+warner()
+{
+	for(;;) {
+		(id, s) := <-warnch;
+		if(s != nil && s[len s-1] == '\n')
+			s = s[:len s-1];
+		warn(id, s);
+	}
+}
+
 cgispawner()
 {
 	for(;;) {
@@ -441,43 +454,48 @@ cgispawner()
 
 cgispawn(cmd, path, cgipath: string, op: ref Op, length: big, replych: chan of (ref Sys->FD, ref Sys->FD, string))
 {
-	# create pipes before pctl newfs, to keep them off stdin,stdout,stderr
-	fd0 := array[2] of ref Sys->FD;
-	fd1 := array[2] of ref Sys->FD;
-	fd2 := array[2] of ref Sys->FD;
-	if(sys->pipe(fd0) != 0 || sys->pipe(fd1) != 0 || sys->pipe(fd2) != 0) {
+	p0 := array[2] of ref Sys->FD;
+	p1 := array[2] of ref Sys->FD;
+	p2 := array[2] of ref Sys->FD;
+	if(sys->pipe(p0) != 0 || sys->pipe(p1) != 0 || sys->pipe(p2) != 0) {
 		replych <-= (nil, nil, sprint("pipe: %r"));
 		return;
 	}
-	spawn errlogger(cmd, op, fd2[0]);
 
-	if(sys->pctl(Sys->NEWFD|Sys->FORKNS|Sys->FORKENV, fd0[1].fd::fd1[1].fd::fd2[1].fd::nil) < 0) {
-		replych <-= (nil, nil, sprint("pctl newfd,forkns,forkenv: %r"));
+	spawn errlogger(op, p2[0]);
+	replych <-= (p0[0], p1[0], nil);
+
+	# only keep our end of the pipe
+	if(sys->pctl(Sys->NEWPGRP|Sys->NEWFD|Sys->FORKNS|Sys->FORKENV, p0[1].fd::p1[1].fd::p2[1].fd::nil) < 0) {
+		replych <-= (nil, nil, sprint("pctl newpgrp,newfd,forkns,forkenv: %r"));
 		return;
 	}
-	for(l := cgivars(path, cgipath, op, length, nil); l != nil; l = tl l)
-		env->setenv((hd l).t0, (hd l).t1);
 
-	if(sys->dup(fd0[1].fd, 0) == -1 || sys->dup(fd1[1].fd, 1) == -1 || sys->dup(fd2[1].fd, 2) == -1) {
+	if(sys->dup(p0[1].fd, 0) == -1 || sys->dup(p1[1].fd, 1) == -1 || sys->dup(p2[1].fd, 2) == -1) {
 		replych <-= (nil, nil, sprint("dup: %r"));
 		return;
 	}
-	replych <-= (fd0[0], fd1[0], nil);
-	fd0 = fd1 = fd2 = nil;
+	p0[1] = fildes(p0[1].fd);
+	p1[1] = fildes(p1[1].fd);
+	p2[1] = fildes(p2[1].fd);
+	p0[0] = p1[0] = p2[0] = nil;
+
+	for(l := cgivars(path, cgipath, op, length, nil); l != nil; l = tl l)
+		env->setenv((hd l).t0, (hd l).t1);
 	err := sh->system(nil, cmd);
 	if(err != nil)
-		warn(op.id, sprint("cgispawn, cmd %q: %s", cmd, err));
+		warnch <-= (op.id, sprint("cgispawn, command %q: %s", cmd, err));
 }
 
-errlogger(cmd: string, op: ref Op, fd: ref Sys->FD)
+errlogger(op: ref Op, fd: ref Sys->FD)
 {
 	for(;;) {
 		n := sys->read(fd, d := array[Sys->ATOMICIO] of byte, len d);
 		if(n < 0)
-			die(op.id, sprint("reading stderr: %r"));
-		if(n == 0)
+			warnch <-= (op.id, sprint("reading stderr: %r"));
+		if(n <= 0)
 			break;
-		warn(op.id, sprint("%q: %s", cmd, string d[:n]));
+		warnch <-= (op.id, string d[:n]);
 	}
 }
 
@@ -1149,16 +1167,21 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 
 	l := sb.gets('\n');
 	killch <-= timeopid;
+	if(l != nil && l[len l-1] == '\n') {
+		l = l[:len l-1];
+		if(l != nil && l[len l-1] == '\r')
+			l = l[:len l-1];
+	}
 	if(!str->prefix("status:", str->tolower(l))) {
-		warn(id, "bad cgi response line: "+l);
+		warn(id, sprint("bad cgi response line: %q", l));
 		return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
 	}
 	l = str->drop(l[len "status:":], " \t");
 	(resp.st, resp.stmsg) = str->splitstrl(l, " ");
 	if(resp.stmsg != nil)
-		resp.stmsg = droptl(resp.stmsg[1:], " \t\r\n");
+		resp.stmsg = droptl(resp.stmsg[1:], " \t");
 	if(len resp.st != 3 || str->drop(resp.st, "0-9") != "") {
-		warn(id, "bad cgi response line: "+l);
+		warn(id, sprint("bad cgi response line: %q", l));
 		return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
 	}
 
@@ -1171,7 +1194,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 	if(hdrs.has("content-length", nil)) {
 		elengthstr := hdrs.get("content-length");
 		if(elengthstr == nil || str->drop(elengthstr, "0-9") != "") {
-			warn(id, "bad cgi content-length header: "+elengthstr);
+			warn(id, sprint("bad cgi content-length header: %q", elengthstr));
 			return responderrmsg(op, Eservererror, "Internal Server Error:  Invalid content-length from handler");
 		}
 		op.length = elength = big elengthstr;
