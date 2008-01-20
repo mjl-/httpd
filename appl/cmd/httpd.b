@@ -622,14 +622,14 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(rerr != nil) {
 		hdrs.add("connection", "close");
 		op.resp = Resp.mk(HTTP_10, nil, nil, hdrs);
-		responderrmsg(op, Ebadrequest, "Bad Request: reading request: "+rerr);
+		responderrmsg(op, Ebadrequest, "Bad Request: Reading request: "+htmlescape(rerr));
 		killch <-= killpid;
 		die(id, "reading request: "+rerr);
 	}
 	if(req.major != 1) {
 		hdrs.add("connection", "close");
 		op.resp = Resp.mk(HTTP_10, nil, nil, hdrs);
-		responderrmsg(op, Ebadversion, sprint("HTTP Version Not Supported: version requested is HTTP/%d.%d", req.major, req.minor));
+		responderrmsg(op, Ebadversion, sprint("HTTP Version Not Supported: Version requested is HTTP/%d.%d", req.major, req.minor));
 		killch <-= killpid;
 		die(id, sprint("unsupported http version, HTTP/%d.%d", req.major, req.minor));
 	}
@@ -648,7 +648,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	# tell client if it is sending ambiguous requests: duplicate headers of the important kind
 	for(i := 0; i < len nomergeheaders; i++)
 		if(len req.h.findall(nomergeheaders[i]) > 1)
-			return responderrmsg(op, Ebadrequest, sprint("Bad Request: Duplicate headers:  %s", nomergeheaders[i]));
+			return responderrmsg(op, Ebadrequest, sprint("Bad Request: Duplicate headers:  \"%s\"", nomergeheaders[i]));
 
 	if(req.h.has("proxy-authorization", nil))
 		return responderrmsg(op, Ebadrequest, "Bad Request: Proxy-Authorization credentials sent, unacceptable");
@@ -693,7 +693,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		return responderrmsg(op, Enotimplemented, "Not Implemented: PUT and DELETE are not supported");
 
 	* =>
-		return responderrmsg(op, Enotimplemented, "Unknown Method: "+http->methodstr(req.method));
+		return responderrmsg(op, Enotimplemented, sprint("Unknown Method: \"%s\"", htmlescape(http->methodstr(req.method))));
 	}
 
 	# remove occurrences of "/elem/../" from path, returned path always starts with "/"
@@ -741,7 +741,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	}
 	if(req.h.has("authorization", nil) && !needauth && cred != credempty) {
 		resp.h.add("www-authenticate", sprint("Basic realm=\"authentication not allowed, use empty username/password\""));
-		return responderrmsg(op, Eunauthorized, "Sending authorization credentials is not allowed for this resource.  Please use an empty username and password or do not send authorization credentials altogether.");
+		return responderrmsg(op, Eunauthorized, "Not Authorized:  Sending authorization credentials is not allowed for "+
+			"this resource.  Please use an empty username and password or do not send authorization credentials altogether.");
 	}
 	if(debugflag && validauth) say(id, "have valid auth credentials");
 
@@ -750,7 +751,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		(match, dest, replerr) := repl.apply(path);
 		if(replerr != nil) {
 			warn(id, "redirections misconfiguration: "+replerr);
-			return responderrmsg(op, Eservererror, "An error occurred while handling a redirection");
+			return responderrmsg(op, Eservererror, "Internal Server Error: An error occurred while handling a redirection");
 		}
 		if(!match)
 			continue;
@@ -767,18 +768,23 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		if(debugflag) say(id, sprint("redirecting from %q to %q", path, dest));
 		resp.h.set("location", dest);
 		dest = htmlescape(dest);
-		return responderrmsg(op, Emovedpermanently, sprint("Moved Permanently: moved to <a href=\"%s\">%s</a>", dest, dest));
+		return responderrmsg(op, Emovedpermanently, sprint("Moved Permanently: Moved to <a href=\"%s\">%s</a>", dest, dest));
 	}
 
 	# if path is cgi-handled, let cgi() handle the request
 	if(((cgipath, cgiaction, cgitype) := findcgi(cfg, path)).t1 != nil) {
 		if(debugflag) say(id, sprint("passing to (s)cgi handler, cgipath %q cgiaction %q", cgipath, cgiaction));
+
 		timeo := Cgitimeoutsecs*1000;
-		spawn timeout(op, timeo, timeoch := chan of int, donech := chan of int);
+		donech := chan of int;
+
+		spawn timeout(op, timeo, timeoch := chan of int, donech);
 		timeopid := <- timeoch;
 		if(timeopid < 0)
 			die(op.id, "timeout proc failed");
 		spawn cgi(path, op, cgipath, cgiaction, cgitype, timeopid, timeoch, donech);
+
+		# wait for timeout or cgi finished to occur
 		<-donech;
 		return;
 	}
@@ -808,7 +814,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 
 	if(req.method == POST) {
 		resp.h.add("allow", "GET, HEAD, OPTIONS");
-		return responderrmsg(op, Emethodnotallowed, "POST not allowed");
+		return responderrmsg(op, Emethodnotallowed, "Method Not Allowed: POST not allowed");
 	}
 
 	resp.h.add("last-modified", httpdate(dir.mtime));
@@ -819,7 +825,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	havecond: int;
 	(havecond, ifmatch) = req.h.find("if-match");
 	if(req.version() >= HTTP_11 && havecond && !etagmatch(req.version(), tag, ifmatch, 1))
-		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: Etags %q, specified with If-Match did not match", htmlescape(ifmatch)));
+		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: Etags \"%s\", specified with If-Match did not match", htmlescape(ifmatch)));
 
 	ifmodsince := parsehttpdate(req.h.get("if-modified-since"));
 	# http/1.0, head and if-modified-since: rfc1945#8.1;  unsupported date value can safely be ignored.
@@ -834,7 +840,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	(havecond, ifunmodsincestr) = req.h.find("if-unmodified-since");
 	ifunmodsince := parsehttpdate(ifunmodsincestr);
 	if(req.version() >= HTTP_11 && (ifunmodsince && dir.mtime > ifunmodsince || havecond && ifunmodsince == 0))
-		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: Object has been modified since %s", req.h.get("if-unmodified-since")));
+		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: Object has been modified since \"%s\"", htmlescape(req.h.get("if-unmodified-since"))));
 
 	if(dir.mode&Sys->DMDIR)
 		listdir(path, op, dfd);
@@ -1064,7 +1070,7 @@ timeout(op: ref Op, timeo: int, timeoch, donech: chan of int)
 	sys->sleep(timeo);
 	if(debugflag) say(op.id, sprint("timeout %d ms for request, killing handler pid %d, timeopid %d", timeo, opid, pid));
 	killch <-= opid;
-	responderrmsg(op, Eservererror, "Response could not be generated in time.");
+	responderrmsg(op, Eservererror, "Internal Server Error: Response could not be generated in time");
 	donech <-= 0;
 }
 
@@ -1074,32 +1080,35 @@ cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: int
 	# we always clean up nicely when one of the child procs dies.
 	# we always have to respond on donech (or be killed by the timeout
 	# proc) or we'll leave processes lingering
+	err: string;
 	npid := sys->pctl(Sys->NEWPGRP, nil);
-	if(npid < 0) {
+	if(npid < 0)
+		err = sprint("pctl newpgrp: %r");
+	if(err == nil) {
+		excch <-= (npid, respch := chan of string);
+		err = <-respch;
+	}
+
+	if(err != nil) {
 		killch <-= timeopid;
-		warn(op.id, sprint("pctl newpgr: %r"));
+		warn(op.id, err);
 		responderrmsg(op, Eservererror, nil);
 		donech <-= 0;
 		return;
 	}
-	excch <-= (npid, respch := chan of string);
-	err := <-respch;
-	if(err != nil) {
-		killch <-= timeopid;
-		warn(op.id, sprint("setting exception notify leader: %s", err));
-		responderrmsg(op, Eservererror, nil);
-	} else {
-		# catch exceptions (e.g. when writing to remote fails), to make sure our caller can return
-		{ _cgi(path, op, cgipath, cgiaction, cgitype, timeopid, cgich); }
-		exception {
-		* =>	killch <-= timeopid;	# may already be killed
-		}
+
+	# to make sure our caller can return (e.g. when writing to remote fails)
+	{
+		_cgi(path, op, cgipath, cgiaction, cgitype, timeopid, cgich);
+	} exception {
+	* =>	killch <-= timeopid;	# may already have been killed
 	}
 	donech <-= 0;
 }
 
 _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: int, cgich: chan of int)
 {
+	# pid ends up in timeout(), this proc is killed if it doesn't respond timely
 	pid := sys->pctl(0, nil);
 	cgich <-= pid;
 
@@ -1107,39 +1116,39 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 	req := op.req;
 	resp := op.resp;
 
-	# we are taking a short cut here to avoid feeding the bloat monster:  parsing transfer-coding is too involved for us.
+	# parsing/handling full transfer-coding is too involved for us.
+	# we are taking a short cut here to avoid feeding the bloat monster.
 	length := big 0;
 	if(req.method == POST) {
 		transferenc := req.h.getlist("transfer-encoding");
 		if(req.version() >= HTTP_11 && transferenc != nil && transferenc != "identity")
-			return responderrmsg(op, Enotimplemented, "Not Implemented: Transfer-Encodings other than identity (i.e. no transfer encoding) are not supported (note: Only single values in the simplest syntax are accepted)");
+			return responderrmsg(op, Enotimplemented, "Not Implemented: Transfer-Encodings other than \"identity\" "+
+				"(i.e. no transfer encoding) are not supported");
 
 		if(req.h.has("content-length", nil)) {
 			lengthstr := req.h.get("content-length");
 			if(lengthstr == nil || str->drop(lengthstr, "0-9") != "")
-				return responderrmsg(op, Ebadrequest, sprint("Bad Request: Invalid Content-Length: %q", lengthstr));
+				return responderrmsg(op, Ebadrequest,
+					sprint("Bad Request: Invalid Content-Length: \"%s\"", htmlescape(lengthstr)));
 			length = big lengthstr;
 		} else {
-			e := Elengthrequired;
-			emsg: string;
-			if(req.version() == HTTP_10) {
-				# rfc1945#7.2.2
-				e = Ebadrequest;
-				emsg = "Bad Request: Missing header Content-Length";
-			}
+			(e, emsg) := (Elengthrequired, "");
+			if(req.version() == HTTP_10) # rfc1945#7.2.2
+				(e, emsg) = (Ebadrequest, "Bad Request: Missing header \"Content-Length\"");
 			return responderrmsg(op, e, emsg);
 		}
 
 		contentenc := req.h.getlist("content-encoding");
 		if(contentenc != nil && contentenc != "identity")
-			return responderrmsg(op, Enotimplemented, "Not Implemented: Content-Encoding other than identity (i.e. no content encoding) are not supported (note: Only single values in the simplest syntax are accepted)");
+			return responderrmsg(op, Enotimplemented, "Not Implemented: Content-Encoding other than identity "+
+				"(i.e. no content encoding) are not supported");
 
 		if(req.version() >= HTTP_11 && (expect := req.h.getlist("expect")) != nil) {
 			# we are not compliant here, values such as "100-continue, " are valid and must be treated as "100-continue"
 			# however, that is too much of a pain to parse (well, it gets much more complex, for no good reason).
 			# tough luck sir bloat!
 			if(str->tolower(expect) != "100-continue")
-				return responderrmsg(op, Eexpectationfailed, sprint("Unrecognized Expectectation: %q (note: Only single values in the simplest syntax are accepted)", expect));
+				return responderrmsg(op, Eexpectationfailed, sprint("Expectectation Failed: Unrecognized expectation:  %s", htmlescape(expect)));
 			fprint(op.fd, "HTTP/1.1 100 Continue\r\n\r\n");
 		}
 
