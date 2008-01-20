@@ -1862,7 +1862,7 @@ cfgsread(c: ref Cfgs): string
 		port := e.findfirst("port");
 		if(port == nil)
 			port = "80";
-		(cfg, err) := cfgread(e);
+		(cfg, err) := cfgread(e, port);
 		if(err != nil)
 			return err;
 		cfg.host = host;
@@ -1924,7 +1924,7 @@ Cfg.rev(cfg: self ref Cfg)
 	cfg.auths = rev(cfg.auths);
 }
 
-cfgread(e: ref Dbentry): (ref Cfg, string)
+cfgread(e: ref Dbentry, defaultport: string): (ref Cfg, string)
 {
 	cfg := Cfg.new();
 
@@ -1958,7 +1958,7 @@ cfgread(e: ref Dbentry): (ref Cfg, string)
 				(ok, ipaddr) := IPaddr.parse(ipstr);
 				if(ok != 0)
 					return (nil, sprint("invalid ip address: %q", ipstr));
-				portstr := "80";
+				portstr := defaultport;
 				if(port != nil)
 					portstr = (hd port).val;
 				cfg.addrs = (ref (ipaddr.text(), string int portstr))::cfg.addrs;

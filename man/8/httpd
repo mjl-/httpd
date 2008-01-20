@@ -333,7 +333,7 @@ On the same line,
 `ip'
 should be present and
 `port'
-may be present (it defaults to 80).
+may be present (it defaults to the port of the host definition).
 If virtual hosts are enabled, the local address is checked for each request.  If at least one ip address has been specified and the local address is not present in the addresses list of the per-host configuration for the request, a `404 Object Not Found' is returned.
 
 .PP

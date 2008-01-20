@@ -31,7 +31,7 @@ testing:
 
 todo:
 - look at cgi handling
-- how do aliases influence listen= values for a config?  does a port in the listen= line make sense?
+- testing
 
 - do hostname lookups for config "listen"?  instead of just ips
 - support transfer-encoding chunked and compressed content-encodings from client?
@@ -42,8 +42,6 @@ todo:
 - think of ssl?
 - try to fix dir listings for paths with multiple slashes in them.  firefox breaks on them, is firefox right?
 - test with other browsers
-- try to break it
-- test cases?  automatic testing can probably be done.
 
 - write a doc about http protocol
 	* perhaps with an overview of headers that must be implemented for a minimal webserver
