@@ -32,7 +32,6 @@ testing:
 todo:
 - look at cgi handling
 - how do aliases influence listen= values for a config?  does a port in the listen= line make sense?
-- for some errors, e.g. "range not satisfiable", we must not set the etag?
 
 - do hostname lookups for config "listen"?  instead of just ips
 - support transfer-encoding chunked and compressed content-encodings from client?

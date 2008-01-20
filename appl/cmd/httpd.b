@@ -463,25 +463,39 @@ cgispawn(cmd, path, cgipath: string, op: ref Op, length: big, replych: chan of (
 	}
 
 	spawn errlogger(op, p2[0]);
-	replych <-= (p0[0], p1[0], nil);
 
 	# only keep our end of the pipe
-	if(sys->pctl(Sys->NEWPGRP|Sys->NEWFD|Sys->FORKNS|Sys->FORKENV, p0[1].fd::p1[1].fd::p2[1].fd::nil) < 0) {
+	if(sys->pctl(Sys->NEWPGRP|Sys->NEWFD|Sys->FORKNS|Sys->FORKENV, p0[0].fd::p1[0].fd::p0[1].fd::p1[1].fd::p2[1].fd::nil) < 0) {
 		replych <-= (nil, nil, sprint("pctl newpgrp,newfd,forkns,forkenv: %r"));
 		return;
+	}
+
+	for(l := cgivars(path, cgipath, op, length, nil); l != nil; l = tl l) {
+		epath := "/env/"+(hd l).t0;
+		efd := sys->create(epath, Sys->OWRITE, 8r666);
+		if(efd == nil) {
+			replych <-= (nil, nil, sprint("open %q: %r", epath));
+			return;
+		}
+		d := array of byte (hd l).t1;
+		if(sys->write(efd, d, len d) != len d) {
+			replych <-= (nil, nil, sprint("write %q: %r", epath));
+			return;
+		}
 	}
 
 	if(sys->dup(p0[1].fd, 0) == -1 || sys->dup(p1[1].fd, 1) == -1 || sys->dup(p2[1].fd, 2) == -1) {
 		replych <-= (nil, nil, sprint("dup: %r"));
 		return;
 	}
+
+	replych <-= (p0[0], p1[0], nil);
+
 	p0[1] = fildes(p0[1].fd);
 	p1[1] = fildes(p1[1].fd);
 	p2[1] = fildes(p2[1].fd);
 	p0[0] = p1[0] = p2[0] = nil;
 
-	for(l := cgivars(path, cgipath, op, length, nil); l != nil; l = tl l)
-		env->setenv((hd l).t0, (hd l).t1);
 	err := sh->system(nil, cmd);
 	if(err != nil)
 		warnch <-= (op.id, sprint("cgispawn, command %q: %s", cmd, err));
@@ -726,7 +740,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		return responderrmsg(op, Eunauthorized, nil);
 	}
 	if(req.h.has("authorization", nil) && !needauth && cred != credempty) {
-		resp.h.add("www-authenticate", sprint("Basic realm=\"authentication not allowed\""));
+		resp.h.add("www-authenticate", sprint("Basic realm=\"authentication not allowed, use empty username/password\""));
 		return responderrmsg(op, Eunauthorized, "Sending authorization credentials is not allowed for this resource.  Please use an empty username and password or do not send authorization credentials altogether.");
 	}
 	if(debugflag && validauth) say(id, "have valid auth credentials");
