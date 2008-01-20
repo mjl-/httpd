@@ -14,47 +14,6 @@ features:
 - as compliant as possible, where reasonable
 - mindful of security
 
-testing:
-- better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
-	- aliases for host/port configs
-	- verify local ip is in allowed list for request
-	- if no listen ips have been specified, allow on all.  if any has been specified, enforce.
-	- use host:port for vhost dirs
-	- config reloading.  on explicit request only?  over file2chan thing
-	- make sure command-line options make sense now (work)
-	- do all changeable config options work after reload?
-- redirects based on path rewriting?
-- accesslog optional
-- find rfc that handles ip6 addresses in host-header, and understand them with port
-- "accesslog" in config file, and reloading works
-- write events to error log:  started, reloaded
-
-todo:
-- look at cgi handling
-- testing
-
-- do hostname lookups for config "listen"?  instead of just ips
-- support transfer-encoding chunked and compressed content-encodings from client?
-- check for security issues with http
-- check spec which error responses must be with/without body
-- transparent compression?
-- connection rate limiting?
-- think of ssl?
-- try to fix dir listings for paths with multiple slashes in them.  firefox breaks on them, is firefox right?
-- test with other browsers
-
-- write a doc about http protocol
-	* perhaps with an overview of headers that must be implemented for a minimal webserver
-	* which headers are safe to ignore
-	* which parts of the spec aren't used much
-	* which parts of the spec are abused/misused
-	* which "extensions" are encountered in the wild
-	* where the spec isn't complete or contradicts itself
-	* which headers are for clients/proxies/servers only.
-	* which response codes return an entity body
-	* common client requests
-	* common server responses
-
 install
 
 to install this software, make sure there is a mkconfig file in
@@ -74,3 +33,32 @@ licence
 all files written by me (i.e. all except the rfcs in doc/) are
 in the public domain.  for bugs, questions, comments, etc., contact
 me at mechiel@ueber.net or mechiel@xs4all.nl.
+
+
+testing:
+- better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
+	- aliases for host/port configs
+	- verify local ip is in allowed list for request
+	- if no listen ips have been specified, allow on all.  if any has been specified, enforce.
+	- use host:port for vhost dirs
+	- config reloading.  on explicit request only?  over file2chan thing
+	- make sure command-line options make sense now (work)
+	- do all changeable config options work after reload?
+- redirects based on path rewriting?
+- accesslog optional
+- find rfc that handles ip6 addresses in host-header, and understand them with port
+- "accesslog" in config file, and reloading works
+- write events to error log:  started, reloaded
+
+todo:
+- testing
+
+- do hostname lookups for config "listen"?  instead of just ips
+- support transfer-encoding chunked and compressed content-encodings from client?
+- check for security issues with http
+- check spec which error responses must be with/without body
+- transparent compression?
+- connection rate limiting?
+- think of ssl?
+- try to fix dir listings for paths with multiple slashes in them.  firefox breaks on them, is firefox right?
+- test with other browsers

@@ -1123,6 +1123,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 	# parsing/handling full transfer-coding is too involved for us.
 	# we are taking a short cut here to avoid feeding the bloat monster.
 	length := big 0;
+	needcontinue := 0;
 	if(req.method == POST) {
 		transferenc := req.h.getlist("transfer-encoding");
 		if(req.version() >= HTTP_11 && transferenc != nil && transferenc != "identity")
@@ -1147,14 +1148,10 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 			return responderrmsg(op, Enotimplemented, "Not Implemented: Content-Encoding other than identity "+
 				"(i.e. no content encoding) are not supported");
 
-		if(req.version() >= HTTP_11 && (expect := req.h.getlist("expect")) != nil) {
-			# we are not compliant here, values such as "100-continue, " are valid and must be treated as "100-continue"
-			# however, that is too much of a pain to parse (well, it gets much more complex, for no good reason).
-			# tough luck sir bloat!
-			if(str->tolower(expect) != "100-continue")
-				return responderrmsg(op, Eexpectationfailed, sprint("Expectectation Failed: Unrecognized expectation:  %s", htmlescape(expect)));
-			fprint(op.fd, "HTTP/1.1 100 Continue\r\n\r\n");
-		}
+		needcontinue = req.version() >= HTTP_11 && req.h.has("expect", nil);
+		if(needcontinue && (expect := str->tolower(req.h.getlist("expect"))) != "100-continue")
+			return responderrmsg(op, Eexpectationfailed,
+				sprint("Expectectation Failed: Unrecognized expectation:  %s", htmlescape(expect)));
 
 		if(debugflag) say(id, sprint("post, client content-length %bd", length));
 	}
@@ -1195,38 +1192,66 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 		return responderrmsg(op, Eservererror, nil);
 	}
 
-	l := sb.gets('\n');
-	killch <-= timeopid;
-	if(l == nil) {
-		warn(id, "eof from cgi handler while reading response line");
-		return responderrmsg(op, Eservererror, "Internal Server Error: EOF from handler");
-	}
-	l = l[:len l-1];
-	if(l != nil && l[len l-1] == '\r')
-		l = l[:len l-1];
+
+
+
+		if(req.version() >= HTTP_11 && (expect := req.h.getlist("expect")) != nil) {
+			# we are not compliant here, values such as "100-continue, " are valid and must be treated as "100-continue"
+			# however, that is too much of a pain to parse (well, it gets much more complex, for no good reason).
+			# tough luck sir bloat!
+			if(str->tolower(expect) != "100-continue")
+				return responderrmsg(op, Eexpectationfailed, sprint("Expectectation Failed: Unrecognized expectation:  %s", htmlescape(expect)));
+			fprint(op.fd, "HTTP/1.1 100 Continue\r\n\r\n");
+		}
+
 
 	# we always want a "status: ..." line from the cgi program.  it would be better if we would
 	# generate a "200 ok" if the status is missing, but we cannot parse the full http request
 	# after we've already read the first line (with a header in it) from the iobuf...
 
-	if(!str->prefix("status:", str->tolower(l))) {
-		warn(id, sprint("bad cgi response line: %q", l));
-		return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
-	}
-	l = str->drop(l[len "status:":], " \t");
-	(resp.st, resp.stmsg) = str->splitstrl(l, " ");
-	if(resp.stmsg != nil)
-		resp.stmsg = droptl(resp.stmsg[1:], " \t");
-	if(len resp.st != 3 || str->drop(resp.st, "0-9") != "") {
-		warn(id, sprint("bad cgi response line: %q", l));
-		return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
+	l := sb.gets('\n');
+	killch <-= timeopid;
+
+	rerr: string;
+	hdrs: ref Hdrs;
+	for(;;) {
+		if(l == nil) {
+			warn(id, "eof from cgi handler while reading response line");
+			return responderrmsg(op, Eservererror, "Internal Server Error: EOF from handler");
+		}
+		l = l[:len l-1];
+		if(l != nil && l[len l-1] == '\r')
+			l = l[:len l-1];
+
+		if(!str->prefix("status:", str->tolower(l))) {
+			warn(id, sprint("bad cgi response line: %q", l));
+			return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
+		}
+		l = str->drop(l[len "status:":], " \t");
+		(resp.st, resp.stmsg) = str->splitstrl(l, " ");
+		if(resp.stmsg != nil)
+			resp.stmsg = droptl(resp.stmsg[1:], " \t");
+		if(len resp.st != 3 || str->drop(resp.st, "0-9") != "") {
+			warn(id, sprint("bad cgi response line: %q", l));
+			return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
+		}
+
+		(hdrs, rerr) = Hdrs.read(sb);
+		if(rerr != nil) {
+			warn(id, "reading cgi headers: "+rerr);
+			return responderrmsg(op, Eservererror, "Internal Server Error:  Error reading headers from handler");
+		}
+
+		if(needcontinue) {
+			fprint(op.fd, "HTTP/1.1 100 Continue\r\n\r\n");
+			if(resp.st == "100") {
+				l = sb.gets('\n');
+				continue;
+			}
+		}
+		break;
 	}
 
-	(hdrs, rerr) := Hdrs.read(sb);
-	if(rerr != nil) {
-		warn(id, "reading cgi headers: "+rerr);
-		return responderrmsg(op, Eservererror, "Internal Server Error:  Error reading headers from handler");
-	}
 	elength := big -1;
 	if(hdrs.has("content-length", nil)) {
 		elengthstr := hdrs.get("content-length");

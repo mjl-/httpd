@@ -352,6 +352,10 @@ Also, suspicious combinations of headers are typically responded to with an erro
 .IR regex (6)
 .PP
 SCGI protocol: http://python.ca/scgi/protocol.txt
+.br
+RFC1945: "Hypertext Transfer Protocol -- HTTP/1.0"
+.br
+RFC2616: "Hypertext Transfer Protocol -- HTTP/1.1"
 .SH BUGS
 Attrdb was not designed for configuration file use.  The per-host configuration attributes can not be nicely grouped as top-level entries can.  No line numbers are printed for errors.
 .PP
