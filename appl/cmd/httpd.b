@@ -368,7 +368,6 @@ init(nil: ref Draw->Context, args: list of string)
 		(aok, aconn) := sys->announce(addr);
 		if(aok != 0)
 			fail(sprint("announce %q: %r", addr));
-		say(0, sprint("announed to %q", addr));
 		spawn listen(hd addrs, aconn, sync := chan of int);
 		<-sync;
 	}
@@ -668,6 +667,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 
 	# when host-header is absent, we'll request the empty host name, the default
 	host := splithost(req.h.get("host")).t0;
+	if(str->drop(host, "0-9a-zA-Z.:-") != nil || str->splitstrl(host, "..").t1 != nil)
+		return responderrmsg(op, Ebadrequest, nil);
 	op.cfg = cfg := configs.lookup(host, op.lport);
 	if(cfg == nil)
 		return responderrmsg(op, Enotfound, nil);
@@ -712,22 +713,22 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	# we ignore the port in the host-header.  this is illegal according to rfc2616, but using it is just silly.
 	# also, we violate rfc2616 by sending 404 "not found" when the host doesn't exist.
 	# we should send 400 "bad request" then, but that is just silly too.
-	(havehost, hostdir) := req.h.find("host");
-	if(!havehost) {
-		hostdir = "_default:"+cfg.port;
-	} else {
-		(hostdir, nil) = splithost(hostdir);
-		if(str->drop(hostdir, "0-9a-zA-Z.:-") != nil || str->splitstrl(hostdir, "..").t1 != nil)
-			return responderrmsg(op, Ebadrequest, nil);
-		hostdir += ":"+cfg.port;
+	if(vhostflag) {
+		hostdir: string;
+		if(cfg.host != "") {
+			hostdir = cfg.host+":"+cfg.port;
+			if(sys->chdir(hostdir) != 0) {
+				hostdir = nil;
+				if(debugflag) say(id, sprint("using hostdir %q from config failed, trying default", hostdir));
+			}
+		}
+		if(hostdir == nil) {
+			hostdir = "_default:"+cfg.port;
+			if(sys->chdir(hostdir) != 0)
+				return responderrmsg(op, Enotfound, nil);
+		}
+		if(debugflag) say(id, sprint("using hostdir %q, path %q", hostdir, path));
 	}
-	if(vhostflag && sys->chdir(hostdir) != 0) {
-		hostdir = "_default:"+cfg.port;
-		# according to the spec, this error should send a "bad request" response...
-		if(havehost && sys->chdir(hostdir) != 0)
-			return responderrmsg(op, Enotfound, nil);
-	}
-	if(debugflag) say(id, sprint("using hostdir %q, path %q", hostdir, path));
 
 	validauth := needauth := 0;
 	realm: string;
@@ -766,8 +767,9 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		if(!match)
 			continue;
 		if(!str->prefix("http:", dest)) {
+			(havehost, hosthdr) := req.h.find("host");
 			if(havehost) {
-				dest = "http://"+req.h.get("host")+dest;
+				dest = "http://"+hosthdr+dest;
 			} else {
 				lport := "";
 				if(op.lport != "80")
@@ -1920,6 +1922,8 @@ cfgsread(c: ref Cfgs): string
 		(cfg, err) := cfgread(e, port);
 		if(err != nil)
 			return err;
+		if(host == "*")
+			host = "";
 		cfg.host = host;
 		cfg.port = string int port;
 		if(host == nil)

@@ -136,7 +136,7 @@ entry starts a configuration for a domain, attribute
 is optional and defaults to 80.
 The value for
 `host'
-may be the empty string.  In this case the entry will serve as default entry, used when no other entry matches an incoming request.
+may be `*'.  In this case the entry will serve as default entry, used when no other entry matches an incoming request.
 A host configuraty entry can be reused for another host by an entry with attribute `alias' (value ignored).  Attributes
 `host'
 and
