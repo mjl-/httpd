@@ -822,9 +822,6 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(req.version() >= HTTP_11 && (ifunmodsince && dir.mtime > ifunmodsince || havecond && ifunmodsince == 0))
 		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: Object has been modified since %s", req.h.get("if-unmodified-since")));
 
-	if(cfg.cachesecs >= 0)
-		resp.h.add("cache-control", sprint("maxage=%d", cfg.cachesecs));
-
 	if(dir.mode&Sys->DMDIR)
 		listdir(path, op, dfd);
 	else
@@ -919,6 +916,9 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 	} else
 		ranges = ref (big 0, dir.length)::nil;
 
+	if(op.cfg.cachesecs >= 0)
+		resp.h.add("cache-control", sprint("maxage=%d", op.cfg.cachesecs));
+
 	accesslog(op);
 
 	rerr := hresp(resp, op.fd, op.keepalive, op.chunked);
@@ -962,6 +962,9 @@ listdir(path: string, op: ref Op, dfd: ref Sys->FD)
 	if(debugflag) say(id, "doing directory listing");
 	resp.h.add("content-type", "text/html; charset=utf-8");
 	op.chunked = resp.version() >= HTTP_11;
+
+	if(op.cfg.cachesecs >= 0)
+		resp.h.add("cache-control", sprint("maxage=%d", op.cfg.cachesecs));
 
 	accesslog(op);
 
