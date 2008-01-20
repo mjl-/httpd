@@ -1197,11 +1197,18 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 
 	l := sb.gets('\n');
 	killch <-= timeopid;
-	if(l != nil && l[len l-1] == '\n') {
-		l = l[:len l-1];
-		if(l != nil && l[len l-1] == '\r')
-			l = l[:len l-1];
+	if(l == nil) {
+		warn(id, "eof from cgi handler while reading response line");
+		return responderrmsg(op, Eservererror, "Internal Server Error: EOF from handler");
 	}
+	l = l[:len l-1];
+	if(l != nil && l[len l-1] == '\r')
+		l = l[:len l-1];
+
+	# we always want a "status: ..." line from the cgi program.  it would be better if we would
+	# generate a "200 ok" if the status is missing, but we cannot parse the full http request
+	# after we've already read the first line (with a header in it) from the iobuf...
+
 	if(!str->prefix("status:", str->tolower(l))) {
 		warn(id, sprint("bad cgi response line: %q", l));
 		return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
