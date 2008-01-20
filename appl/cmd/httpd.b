@@ -322,7 +322,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	environment = env->getall();
 
-	pid := sys->pctl(Sys->FORKNS|Sys->FORKENV|Sys->FORKFD, nil);
+	pid := sys->pctl(Sys->NEWPGRP|Sys->FORKNS|Sys->FORKENV|Sys->FORKFD, nil);
 	if(pid < 0)
 		fail(sprint("pctl: %r"));
 	if(sys->chdir(webroot) != 0)
@@ -363,17 +363,21 @@ init(nil: ref Draw->Context, args: list of string)
 
 	if(addrs == nil)
 		addrs = defaddr::nil;
-	for(addrs = rev(addrs); addrs != nil; addrs = tl addrs)
-		spawn announce(hd addrs);
+	for(addrs = rev(addrs); addrs != nil; addrs = tl addrs) {
+		addr := hd addrs;
+		(aok, aconn) := sys->announce(addr);
+		if(aok != 0)
+			fail(sprint("announce %q: %r", addr));
+		say(0, sprint("announed to %q", addr));
+		spawn listen(hd addrs, aconn, sync := chan of int);
+		<-sync;
+	}
 	warn(0, sprint("httpd started at %s", daytime->time()));
 }
 
-announce(addr: string)
+listen(addr: string, aconn: Sys->Connection, sync: chan of int)
 {
-	(aok, aconn) := sys->announce(addr);
-	if(aok != 0)
-		fail(sprint("announce %q: %r", addr));
-	say(0, sprint("announed to %q", addr));
+	sync <-= 0;
 	for(;;) {
 		(lok, lconn) := sys->listen(aconn);
 		if(lok != 0)
@@ -1183,7 +1187,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 	}
 
 	if(length > big 0)
-		spawn cgifunnel(op.inb, fd0, length);
+		spawn cgifunnel(op.id, op.inb, fd0, length);
 
 	sb := bufio->fopen(fd1, Bufio->OREAD);
 	if(sb == nil) {
@@ -1260,7 +1264,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 	if(debugflag) say(id, "request done");
 }
 
-cgifunnel(b: ref Iobuf, sfd: ref Sys->FD, length: big)
+cgifunnel(id: int, b: ref Iobuf, sfd: ref Sys->FD, length: big)
 {
 	while(length > big 0) {
 		need := Sys->ATOMICIO;
@@ -1268,11 +1272,11 @@ cgifunnel(b: ref Iobuf, sfd: ref Sys->FD, length: big)
 			need = int length;
 		n := b.read(d := array[need] of byte, len d);
 		if(n < 0)
-			fail(sprint("fail:cgi read: %r"));
+			die(id, sprint("cgi read: %r"));
 		if(n == 0)
-			fail(sprint("fail:cgi read: premature eof"));
+			die(id, "cgi read: premature eof");
 		if(sys->write(sfd, d, n) != n)
-			fail(sprint("fail:cgi write: %r"));
+			die(id, sprint("cgi write: %r"));
 		length -= big n;
 	}
 }
