@@ -624,9 +624,15 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	(req, rerr) := Req.read(b);
 	hdrs.add("date", httpdate(op.now));
 	if(rerr != nil) {
-		hdrs.add("connection", "close");
-		op.resp = Resp.mk(HTTP_10, nil, nil, hdrs);
-		responderrmsg(op, Ebadrequest, "Bad Request: Reading request: "+htmlescape(rerr));
+		st := Ebadrequest;
+		stmsg := statusmsg(st);
+		op.resp = Resp.mk(HTTP_10, string st, stmsg, hdrs);
+		html := array of byte mkhtml(sprint("%d - %s: %s", st, stmsg, rerr));
+		op.resp.h.add("content-type", "text/html; charset=utf-8");
+		op.resp.h.add("content-length", string len html);
+		err := hresp(op.resp, op.fd, 0, 0);
+		if(err == nil)
+			sys->write(op.fd, html, len html);
 		killch <-= killpid;
 		die(id, "reading request: "+rerr);
 	}
