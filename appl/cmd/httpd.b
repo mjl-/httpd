@@ -703,7 +703,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		return responderrmsg(op, Enotimplemented, "Not Implemented: PUT and DELETE are not supported");
 
 	* =>
-		return responderrmsg(op, Enotimplemented, sprint("Unknown Method: \"%s\"", htmlescape(http->methodstr(req.method))));
+		return responderrmsg(op, Enotimplemented, sprint("Unknown Method: \"%s\"", http->methodstr(req.method)));
 	}
 
 	# remove occurrences of "/elem/../" from path, returned path always starts with "/"
@@ -778,7 +778,10 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		if(debugflag) say(id, sprint("redirecting from %q to %q", path, dest));
 		resp.h.set("location", dest);
 		dest = htmlescape(dest);
-		return responderrmsg(op, Emovedpermanently, sprint("Moved Permanently: Moved to <a href=\"%s\">%s</a>", dest, dest));
+		st := Emovedpermanently;
+		html := mkhtmlstart(sprint("%d - %s", st, statusmsg(st))) +
+			sprint("<h1>Moved Permanently: Moved to <a href=\"%s\">%s</a></h1>\n", dest, dest)+"</body></html>\n";
+		return respond(op, Emovedpermanently, html, "text/html; charset=utf-8");
 	}
 
 	# if path is cgi-handled, let cgi() handle the request
@@ -835,13 +838,14 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	havecond: int;
 	(havecond, ifmatch) = req.h.find("if-match");
 	if(req.version() >= HTTP_11 && havecond && !etagmatch(req.version(), tag, ifmatch, 1))
-		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: Etags \"%s\", specified with If-Match did not match", htmlescape(ifmatch)));
+		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: Etag(s) \"%s\", specified with If-Match did not match", ifmatch));
 
 	ifmodsince := parsehttpdate(req.h.get("if-modified-since"));
 	# http/1.0, head and if-modified-since: rfc1945#8.1;  unsupported date value can safely be ignored.
 	if(!(req.version() == HTTP_10 && req.method == HEAD) && ifmodsince && dir.mtime <= ifmodsince)
 		return responderr(op, Enotmodified);
 
+	# note: for get this is okay, but for put/delete a bad-syntax value would be have to raise an error
 	(havecond, ifnonematch) = req.h.find("if-none-match");
 	if(req.version() >= HTTP_11 && havecond && req.method == GET && etagmatch(req.version(), tag, ifnonematch, 0))
 		return responderr(op, Enotmodified);
@@ -850,7 +854,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	(havecond, ifunmodsincestr) = req.h.find("if-unmodified-since");
 	ifunmodsince := parsehttpdate(ifunmodsincestr);
 	if(req.version() >= HTTP_11 && (ifunmodsince && dir.mtime > ifunmodsince || havecond && ifunmodsince == 0))
-		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: Object has been modified since \"%s\"", htmlescape(req.h.get("if-unmodified-since"))));
+		return responderrmsg(op, Epreconditionfailed, sprint("Precondition Failed: Object has been modified since \"%s\"", req.h.get("if-unmodified-since")));
 
 	if(dir.mode&Sys->DMDIR)
 		listdir(path, op, dfd);
@@ -1140,7 +1144,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 			lengthstr := req.h.get("content-length");
 			if(lengthstr == nil || str->drop(lengthstr, "0-9") != "")
 				return responderrmsg(op, Ebadrequest,
-					sprint("Bad Request: Invalid Content-Length: \"%s\"", htmlescape(lengthstr)));
+					sprint("Bad Request: Invalid Content-Length: \"%s\"", lengthstr));
 			length = big lengthstr;
 		} else {
 			(e, emsg) := (Elengthrequired, "");
@@ -1157,7 +1161,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 		needcontinue = req.version() >= HTTP_11 && req.h.has("expect", nil);
 		if(needcontinue && (expect := str->tolower(req.h.getlist("expect"))) != "100-continue")
 			return responderrmsg(op, Eexpectationfailed,
-				sprint("Expectectation Failed: Unrecognized expectation:  %s", htmlescape(expect)));
+				sprint("Expectectation Failed: Unrecognized expectation:  %s", expect));
 
 		if(debugflag) say(id, sprint("post, client content-length %bd", length));
 	}
@@ -1206,7 +1210,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 			# however, that is too much of a pain to parse (well, it gets much more complex, for no good reason).
 			# tough luck sir bloat!
 			if(str->tolower(expect) != "100-continue")
-				return responderrmsg(op, Eexpectationfailed, sprint("Expectectation Failed: Unrecognized expectation:  %s", htmlescape(expect)));
+				return responderrmsg(op, Eexpectationfailed, sprint("Expectectation Failed: Unrecognized expectation:  %s", expect));
 			fprint(op.fd, "HTTP/1.1 100 Continue\r\n\r\n");
 		}
 
