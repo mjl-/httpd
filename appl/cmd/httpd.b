@@ -56,7 +56,7 @@ Cfgs: adt {
 	file:	string;
 	db:	ref Db;
 	default:	ref Cfg;
-	cfgs:	list of (string, string, ref Cfg);	# host, port, config
+	cfgs:	list of (string, string, ref Cfg);	# host, port (for lookup) => config
 	lookupch:	chan of (string, string, chan of ref Cfg);
 	logfile:	string;
 
@@ -663,8 +663,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		return responderrmsg(op, Enotfound, nil);
 
 	# do not accept request when doing vhost and request is from ip that we shouldn't serve host:port on
-	addrokay := !vhostflag || cfg.addrs == nil;
-	if(!addrokay) {
+	if(vhostflag && cfg.addrs != nil) {
+		addrokay := 0;
 		for(as := cfg.addrs; !addrokay && as != nil; as = tl as) {
 			(chost, cport) := *(hd as);
 			addrokay = chost == op.lhost && cport == op.lport;
@@ -755,9 +755,9 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		if(!match)
 			continue;
 		if(!str->prefix("http:", dest)) {
-			if(havehost)
+			if(havehost) {
 				dest = "http://"+req.h.get("host")+dest;
-			else {
+			} else {
 				lport := "";
 				if(op.lport != "80")
 					lport = ":"+op.lport;
