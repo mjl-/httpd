@@ -635,8 +635,12 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 
 	(req, rerr) := Req.read(b);
 	hdrs.add("date", httpdate(op.now));
-	if(rerr != nil) {
+	if(rerr != nil || req.major != 1) {
 		st := Ebadrequest;
+		if(req.major != 1) {
+			st = Ebadversion;
+			rerr = sprint("Version requested is HTTP/%d.%d", req.major, req.minor);
+		}
 		stmsg := statusmsg(st);
 		op.resp = Resp.mk(HTTP_10, string st, stmsg, hdrs);
 		html := array of byte mkhtml(sprint("%d - %s: %s", st, stmsg, rerr));
@@ -647,13 +651,6 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 			sys->write(op.fd, html, len html);
 		killch <-= killpid;
 		die(id, "reading request: "+rerr);
-	}
-	if(req.major != 1) {
-		hdrs.add("connection", "close");
-		op.resp = Resp.mk(HTTP_10, nil, nil, hdrs);
-		responderrmsg(op, Ebadversion, sprint("HTTP Version Not Supported: Version requested is HTTP/%d.%d", req.major, req.minor));
-		killch <-= killpid;
-		die(id, sprint("unsupported http version, HTTP/%d.%d", req.major, req.minor));
 	}
 	killch <-= killpid;
 	if(debugflag) say(id, sprint("request: method %q url %q version %q",
@@ -699,12 +696,15 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		}
 	}
 
+	if(req.version() == HTTP_10 && req.method != GET && req.method != HEAD && req.method != POST)
+		return responderrmsg(op, Enotimplemented, sprint("Unknown Method: \"%s\"", http->methodstr(req.method)));
+
 	case req.method {
 	GET or HEAD or POST =>
 		;
 	TRACE =>
-		hdrs.add("content-type", "message/http");
-		return responderrmsg(op, Eok, req.pack());
+		# note: the response does not have * as path, but /
+		return respond(op, Eok, req.pack(), "message/http");
 
 	OPTIONS =>
 		# only (s)cgi paths allow POST, but we won't say, the path may require auth as well.  what to do then?
