@@ -1036,7 +1036,7 @@ listdir(path: string, op: ref Op, dfd: ref Sys->FD)
 			name := d[i].name;
 			if(d[i].mode & Sys->DMDIR)
 				name += "/";
-			html += sprint("<tr><td class=\"mtime\">%s</td><td class=\"size\">%bd</td><td class=\"name\"><a href=\"%s\">%s</a></td></tr>\n", daytime->filet(op.now, d[i].mtime), d[i].length, htmlescape(encodepath(name)), htmlescape(name));
+			html += sprint("<tr><td class=\"mtime\">%s</td><td class=\"size\">%bd</td><td class=\"name\"><a href=\"%s\">%s</a></td></tr>\n", daytime->filet(op.now, d[i].mtime), d[i].length, htmlescape(encodepath("./"+name)), htmlescape(name));
 		}
 		hwrite(op, array of byte html);
 	}
