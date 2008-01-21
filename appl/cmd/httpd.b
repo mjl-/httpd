@@ -268,7 +268,7 @@ init(nil: ref Draw->Context, args: list of string)
 	(configs, err) = Cfgs.init("/dev/null");
 	if(err != nil)
 		fail("making empty config: "+err);
-	defcfg := configs.default = Cfg.new();
+	defcfg := configs.default;
 
 	arg := load Arg Arg->PATH;
 	arg->init(args);
@@ -301,6 +301,7 @@ init(nil: ref Draw->Context, args: list of string)
 				fprint(fildes(2), "reading %q: %s\n", file, err);
 				raise "fail:usage";
 			}
+			defcfg = configs.default;
 			defcfg.rev();
 			configs.usertypes = rev(configs.usertypes);
 			configs.addrs = rev(configs.addrs);
@@ -1496,12 +1497,16 @@ splithost(s: string): (string, string)
 {
 	sep := ":";	# host name or ip4, "host:port" or "ip4:host"
 	if(s != nil && s[0] == '[')	# ip6 host, "[ip6]:port"
-		sep = "]:";
+		sep = "]";
 	(host, port) := str->splitstrl(s, sep);
 	if(port != nil)
 		port = port[len sep:];
-	if(sep == "]:" && host != nil && host[0] == '[' && host[len host-1] == ']')
-		host = host[1:len host-1];
+	if(sep == "]" && host != nil && host[0] == '[' && port != nil) {
+		host = host[1:len host];
+		port = port[1:];
+		if(port != nil && port[0] == ':')
+			port = port[1:];
+	}
 	return (host, port);
 }
 
@@ -1875,7 +1880,7 @@ cfgserver()
 
 cfgsread(file: string, db: ref Db): (ref Cfgs, string)
 {
-	c := ref Cfgs(file, db, nil, nil, nil, 0, 0, nil, nil);
+	c := ref Cfgs(file, db, Cfg.new(), nil, nil, 0, 0, nil, nil);
 	logfile: string;
 
 	e: ref Dbentry; 
