@@ -51,7 +51,6 @@ testing:
 - write events to error log:  started, reloaded
 
 todo:
-- config reloading, in case of error for rereading, we should not change "configs"
 - more testing
 
 - do hostname lookups for config "listen"?  instead of just ips

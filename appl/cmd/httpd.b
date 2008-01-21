@@ -57,18 +57,20 @@ Cfgs: adt {
 	db:	ref Db;
 	default:	ref Cfg;
 	cfgs:	list of (string, string, ref Cfg);	# host, port (for lookup) => config
-	lookupch:	chan of (string, string, chan of ref Cfg);
-	logfile:	string;
+
+	accessfd:	ref Sys->FD;
+	debugflag, vhostflag:	int;
+	addrs:	list of string;
+	usertypes:	list of ref (string, string);
 
 	init:	fn(file: string): (ref Cfgs, string);
-	lookup:	fn(c: self ref Cfgs, host, port: string): ref Cfg;
 };
 
 # config for a single host,port
 Cfg: adt {
 	host, port:	string;
 	listings, cachesecs:	int;
-	addrs:	list of ref (string, string);	# ip, port
+	listens:	list of ref (string, string);	# ip, port
 	cgipaths:	list of ref (string, string, int);	# path, cmd|addr, Cgi|Scgi
 	indexfiles:	list of string;
 	redirs:	list of ref Repl;
@@ -98,16 +100,17 @@ Op: adt {
 
 Cgitimeoutsecs: con 3*60;
 Keepalivesecs: con 3*60;
+defaddr: con "net!*!http";
 
 debugflag, vhostflag: int;
-defaddr := "net!*!http";
-addrs: list of string;
-webroot := "";
+accessfd: ref Sys->FD;
+usertypes: list of ref (string, string);
+
+webroot: string;
 credempty: string;
 ctlchan := "";
 
 environment: list of (string, string);
-cfgserverpid := -1;
 
 Httpd: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -167,7 +170,6 @@ mimetypes := array[] of {
 	(".wav",	"audio/x-wav"),
 	(".jpeg",	"image/jpeg"),
 };
-usertypes: list of ref (string, string);
 
 Eok:			con 200;
 Epartialcontent:	con 206;
@@ -229,10 +231,11 @@ killch: chan of int;
 killschedch: chan of (int, int, chan of int);
 excch: chan of (int, chan of string);
 warnch: chan of (int, string);
+cfgnewch: chan of ref Cfgs;
+cfglookupch: chan of (string, string, chan of ref Cfg);
 
 timefd: ref Sys->FD;
 errorfd: ref Sys->FD;
-accessfd: ref Sys->FD;
 
 Cgi, Scgi: con iota;
 cgitypes := array[] of {"cgi", "scgi"};
@@ -279,17 +282,17 @@ init(nil: ref Draw->Context, args: list of string)
 			}
 		'C' =>	defcfg.cachesecs = int arg->earg();
 		'L' =>	defcfg.listings++;
-		'a' =>	addrs = arg->earg()::addrs;
+		'a' =>	configs.addrs = arg->earg()::configs.addrs;
 		'c' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), Cgi)::defcfg.cgipaths;
-		'd' =>	debugflag++;
+		'd' =>	debugflag = configs.debugflag++;
 		'f' =>	ctlchan = arg->earg();
-		'h' =>	vhostflag++;
+		'h' =>	vhostflag = configs.vhostflag++;
 		'i' =>	defcfg.indexfiles = arg->earg()::defcfg.indexfiles;
-		'l' =>	configs.logfile = arg->earg();
-			accessfd = sys->open(configs.logfile, Sys->OWRITE);
-			if(accessfd == nil)
-				fail(sprint("open %q: %r", configs.logfile));
-			sys->seek(accessfd, big 0, Sys->SEEKEND);
+		'l' =>	logfile := arg->earg();
+			configs.accessfd = sys->open(logfile, Sys->OWRITE);
+			if(configs.accessfd == nil)
+				fail(sprint("open logfile %q: %r", logfile));
+			sys->seek(configs.accessfd, big 0, Sys->SEEKEND);
 
 		'n' =>
 			file := arg->earg();
@@ -299,7 +302,8 @@ init(nil: ref Draw->Context, args: list of string)
 				raise "fail:usage";
 			}
 			defcfg.rev();
-			usertypes = rev(usertypes);
+			configs.usertypes = rev(configs.usertypes);
+			configs.addrs = rev(configs.addrs);
 		'r' =>
 			(restr, rulestr) := (arg->earg(), arg->earg());
 			(repl, rerr) := Repl.parse(restr, rulestr);
@@ -309,7 +313,7 @@ init(nil: ref Draw->Context, args: list of string)
 			}
 			defcfg.redirs = repl::defcfg.redirs;
 		's' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), Scgi)::defcfg.cgipaths;
-		't' =>	usertypes = ref (arg->earg(), arg->earg())::usertypes;
+		't' =>	configs.usertypes = ref (arg->earg(), arg->earg())::configs.usertypes;
 		* =>	arg->usage();
 		}
 	args = arg->argv();
@@ -317,7 +321,8 @@ init(nil: ref Draw->Context, args: list of string)
 		arg->usage();
 	webroot = hd args;
 	defcfg.rev();
-	usertypes = rev(usertypes);
+	configs.usertypes = rev(configs.usertypes);
+	configs.addrs = rev(configs.addrs);
 	credempty = base64->enc(array of byte ":");	# empty-user:empty-pass
 
 	environment = env->getall();
@@ -355,15 +360,21 @@ init(nil: ref Draw->Context, args: list of string)
 	warnch = chan of (int, string);
 	spawn warner();
 
+	cfglookupch = chan of (string, string, chan of ref Cfg);
+	cfgnewch = chan of ref Cfgs;
+	spawn cfgserver();
+
+	cfgnewch <-= configs;
+
 	cgispawnch = chan of (string, string, string, ref Op, big, chan of (ref Sys->FD, ref Sys->FD, string));
 	spawn cgispawner();
 
 	scgidialch = chan of (string, chan of (ref Sys->FD, string));
 	spawn scgidialer();
 
-	if(addrs == nil)
-		addrs = defaddr::nil;
-	for(addrs = rev(addrs); addrs != nil; addrs = tl addrs) {
+	if(configs.addrs == nil)
+		configs.addrs = defaddr::nil;
+	for(addrs := rev(configs.addrs); addrs != nil; addrs = tl addrs) {
 		addr := hd addrs;
 		(aok, aconn) := sys->announce(addr);
 		if(aok != 0)
@@ -555,13 +566,14 @@ ctlhandler(fio: ref Sys->FileIO)
 				wc <-= (0, msg);
 				continue;
 			}
-			err := cfgsread(configs);
+			(nconfigs, err) := cfgsread(configs.file, configs.db);
 			if(err != nil) {
 				msg := "error reloading config, keeping current: "+err;
 				warn(0, msg);
 				wc <-= (0, msg);
 				continue;
 			}
+			cfgnewch <-= nconfigs;
 			warn(0, "config file reloaded");
 			wc <-= (len data, nil);
 		* =>
@@ -669,15 +681,15 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	host := splithost(req.h.get("host")).t0;
 	if(str->drop(host, "0-9a-zA-Z.:-") != nil || str->splitstrl(host, "..").t1 != nil)
 		return responderrmsg(op, Ebadrequest, nil);
-	op.cfg = cfg := configs.lookup(host, op.lport);
+	op.cfg = cfg := configlookup(host, op.lport);
 	if(cfg == nil)
 		return responderrmsg(op, Enotfound, nil);
 
 	# do not accept request when doing vhost and request is from ip that we shouldn't serve host:port on
-	if(vhostflag && cfg.addrs != nil) {
+	if(vhostflag && cfg.listens != nil) {
 		addrokay := 0;
-		for(as := cfg.addrs; !addrokay && as != nil; as = tl as) {
-			(chost, cport) := *(hd as);
+		for(ls := cfg.listens; !addrokay && ls != nil; ls = tl ls) {
+			(chost, cport) := *(hd ls);
 			addrokay = chost == op.lhost && cport == op.lport;
 		}
 		if(!addrokay) {
@@ -1468,7 +1480,13 @@ accesslog(op: ref Op)
 	if(!op.chunked && op.length >= big 0)
 		length = string op.length;
 
-	s := sprint("%d %d %s!%s %s!%s %q %q %q %q %q %q %q %q %q", op.id, op.now, op.rhost, op.rport, op.lhost, op.lport, http->methodstr(op.req.method), op.req.h.get("host"), op.req.url.path, sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg, length, op.req.h.get("user-agent"), op.req.h.get("referer"));
+	s := sprint("%d %d %s!%s %s!%s %q %q %q %q %q %q %q %q %q",
+		op.id, op.now,
+		op.rhost, op.rport, op.lhost, op.lport,
+		http->methodstr(op.req.method), op.req.h.get("host"), op.req.url.path,
+		sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg,
+		length,
+		op.req.h.get("user-agent"), op.req.h.get("referer"));
 	if(accessfd != nil)
 		fprint(accessfd, "%s\n", s);
 	if(debugflag) say(op.id, "accesslog: "+s);
@@ -1812,22 +1830,12 @@ Cfgs.init(file: string): (ref Cfgs, string)
 	db := Db.open(file);
 	if(db == nil)
 		return (nil, sprint("open config %q: %r", file));
-	c := ref Cfgs(file, db, nil, nil, chan of (string, string, chan of ref Cfg), nil);
-	err := cfgsread(c);
-	if(err == nil) {
-		if(cfgserverpid >= 0)
-			kill(cfgserverpid);
-		spawn cfgserver(c, pidch := chan of int);
-		cfgserverpid = <-pidch;
-	}
-	return (c, err);
+	return cfgsread(file, db);
 }
 
-Cfgs.lookup(c: self ref Cfgs, host, port: string): ref Cfg
+configlookup(host, port: string): ref Cfg
 {
-	if(!vhostflag)
-		return c.default;
-	c.lookupch <-= (host, port, respch := chan of ref Cfg);
+	cfglookupch <-= (host, port, respch := chan of ref Cfg);
 	return <-respch;
 }
 
@@ -1841,37 +1849,49 @@ cfgfind(c: ref Cfgs, host, port: string): ref Cfg
 	return nil;
 }
 
-cfgserver(c: ref Cfgs, pidch: chan of int)
+cfgserver()
 {
-	pidch <-= sys->pctl(0, nil);
-	for(;;) {
-		(host, port, respch) := <-c.lookupch;
-		cfg := cfgfind(c, host, port);
-		if(cfg == nil)
-			cfg = c.default;
+	c: ref Cfgs;
+
+	for(;;) alt {
+	(host, port, respch) := <-cfglookupch =>
+		cfg := c.default;
+		if(vhostflag) {
+			cfg = cfgfind(c, host, port);
+			if(cfg == nil)
+				cfg = c.default;
+		}
 		respch <-= cfg;
+
+	c = <-cfgnewch =>
+		# change global variables, not atomic, should be...
+		accessfd = c.accessfd;
+		debugflag = c.debugflag;
+		vhostflag = c.vhostflag;
+		usertypes = c.usertypes;
+		configs = c;
 	}
 }
 
-cfgsread(c: ref Cfgs): string
+cfgsread(file: string, db: ref Db): (ref Cfgs, string)
 {
-	nusertypes := usertypes;
-	nusertypes = nil;
+	c := ref Cfgs(file, db, nil, nil, nil, 0, 0, nil, nil);
+	logfile: string;
 
 	e: ref Dbentry; 
 	(e, nil) = c.db.find(nil, "vhost");
 	if(e != nil)
-		vhostflag = 1;
+		c.vhostflag = 1;
 	(e, nil) = c.db.find(nil, "novhost");
 	if(e != nil)
-		vhostflag = 0;
+		c.vhostflag = 0;
 
 	(e, nil) = c.db.find(nil, "debug");
 	if(e != nil)
-		debugflag = 1;
+		c.debugflag = 1;
 	(e, nil) = c.db.find(nil, "nodebug");
 	if(e != nil)
-		debugflag = 0;
+		c.debugflag = 0;
 
 	(e, nil) = c.db.find(nil, "ctlchan");
 	if(e != nil) {
@@ -1884,7 +1904,7 @@ cfgsread(c: ref Cfgs): string
 	if(e != nil) {
 		s := e.findfirst("accesslog");
 		if(s != nil)
-			c.logfile = s;
+			logfile = s;
 	}
 
 	ptr: ref Attrdb->Dbptr;
@@ -1896,8 +1916,8 @@ cfgsread(c: ref Cfgs): string
 		ext := e.findfirst("ext");
 		mtype := e.findfirst("type");
 		if(ext == nil || mtype == nil)
-			return sprint("bad mime type, ext=%q type=%q", ext, mtype);
-		nusertypes = ref (ext, mtype)::nusertypes;
+			return (nil, sprint("bad mime type, ext=%q type=%q", ext, mtype));
+		c.usertypes = ref (ext, mtype)::c.usertypes;
 	}
 	ptr = nil;
 
@@ -1906,7 +1926,7 @@ cfgsread(c: ref Cfgs): string
 		(e, ptr) = c.db.find(ptr, attr);
 		if(e == nil)
 			break;
-		addrs = e.findfirst("announce")::addrs;
+		c.addrs = e.findfirst("announce")::c.addrs;
 	}
 	ptr = nil;
 
@@ -1921,7 +1941,7 @@ cfgsread(c: ref Cfgs): string
 			port = "80";
 		(cfg, err) := cfgread(e, port);
 		if(err != nil)
-			return err;
+			return (nil, err);
 		if(host == "*")
 			host = "";
 		cfg.host = host;
@@ -1948,25 +1968,23 @@ cfgsread(c: ref Cfgs): string
 		if(useport == nil)
 			useport = port;
 		if(usehost == host && useport == port)
-			return "alias line aliases host and port to itself, ignoring";
+			return (nil, "alias line aliases host and port to itself, ignoring");
 		cfg := cfgfind(c, usehost, string int useport);
 		if(cfg == nil)
-			return sprint("alias references non-existing usehost=%q useport=%q", usehost, useport);
+			return (nil, sprint("alias references non-existing usehost=%q useport=%q", usehost, useport));
 		c.cfgs = (host, string int port, cfg)::c.cfgs;
 	}
 	ptr = nil;
 
-	naccessfd: ref Sys->FD;
-	if(c.logfile != nil) {
-		naccessfd = sys->open(c.logfile, Sys->OWRITE);
-		if(naccessfd == nil)
-			return sprint("open logfile %q: %r", c.logfile);
-		sys->seek(naccessfd, big 0, Sys->SEEKEND);
+	if(logfile != nil) {
+		c.accessfd = sys->open(logfile, Sys->OWRITE);
+		if(c.accessfd == nil)
+			return (nil, sprint("open logfile %q: %r", logfile));
+		sys->seek(c.accessfd, big 0, Sys->SEEKEND);
 	}
-	accessfd = naccessfd;
-	usertypes = rev(nusertypes);
+	c.usertypes = rev(c.usertypes);
 
-	return nil;
+	return (c, nil);
 }
 
 Cfg.new(): ref Cfg
@@ -1976,7 +1994,7 @@ Cfg.new(): ref Cfg
 
 Cfg.rev(cfg: self ref Cfg)
 {
-	cfg.addrs = rev(cfg.addrs);
+	cfg.listens = rev(cfg.listens);
 	cfg.cgipaths = rev(cfg.cgipaths);
 	cfg.indexfiles = rev(cfg.indexfiles);
 	cfg.redirs = rev(cfg.redirs);
@@ -2020,7 +2038,7 @@ cfgread(e: ref Dbentry, defaultport: string): (ref Cfg, string)
 				portstr := defaultport;
 				if(port != nil)
 					portstr = (hd port).val;
-				cfg.addrs = (ref (ipaddr.text(), string int portstr))::cfg.addrs;
+				cfg.listens = (ref (ipaddr.text(), string int portstr))::cfg.listens;
 			"redir" =>
 				src := tups.find("src");
 				dst := tups.find("dst");
