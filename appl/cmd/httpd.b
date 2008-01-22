@@ -51,6 +51,21 @@ Repl: adt {
 	apply:	fn(r: self ref Repl, s: string): (int, string, string);
 };
 
+# config for a single host,port
+Cfg: adt {
+	host, port:	string;
+	listings, cachesecs:	int;
+	listens:	list of ref (string, string);	# ip, port
+	cgipaths:	list of ref (string, string, int);	# path, cmd|addr, Cgi|Scgi
+	indexfiles:	list of string;
+	redirs:	list of ref Repl;
+	auths:	list of ref (string, string, string);	# path, realm, base64 user:pass
+
+	new:	fn(): ref Cfg;
+	read:	fn(e: ref Dbentry, defaultport: string): (ref Cfg, string);
+	rev:	fn(cfg: self ref Cfg);
+};
+
 # config file, holds one Cfg per host,port
 Cfgs: adt {
 	file:	string;
@@ -64,24 +79,9 @@ Cfgs: adt {
 	usertypes:	list of ref (string, string);
 
 	init:	fn(file: string): (ref Cfgs, string);
+	read:	fn(file: string, db: ref Db): (ref Cfgs, string);
+	find:	fn(c: self ref Cfgs, host, port: string): ref Cfg;
 };
-
-# config for a single host,port
-Cfg: adt {
-	host, port:	string;
-	listings, cachesecs:	int;
-	listens:	list of ref (string, string);	# ip, port
-	cgipaths:	list of ref (string, string, int);	# path, cmd|addr, Cgi|Scgi
-	indexfiles:	list of string;
-	redirs:	list of ref Repl;
-	auths:	list of ref (string, string, string);	# path, realm, base64 user:pass
-
-	new:	fn(): ref Cfg;
-	rev:	fn(cfg: self ref Cfg);
-};
-
-configs: ref Cfgs;
-
 
 # represents a connection and a request on it
 Op: adt {
@@ -95,6 +95,7 @@ Op: adt {
 	rhost, rport, lhost, lport:	string;
 	req:	ref Req;
 	resp:	ref Resp;
+	cfgs:	ref Cfgs;
 	cfg:	ref Cfg;
 };
 
@@ -102,9 +103,7 @@ Cgitimeoutsecs: con 3*60;
 Keepalivesecs: con 3*60;
 defaddr: con "net!*!http";
 
-debugflag, vhostflag: int;
-accessfd: ref Sys->FD;
-usertypes: list of ref (string, string);
+debugflag: int;
 
 webroot: string;
 credempty: string;
@@ -231,8 +230,8 @@ killch: chan of int;
 killschedch: chan of (int, int, chan of int);
 excch: chan of (int, chan of string);
 warnch: chan of (int, string);
-cfgnewch: chan of ref Cfgs;
-cfglookupch: chan of (string, string, chan of ref Cfg);
+cfgsgetch: chan of chan of ref Cfgs;
+newcfgsch: chan of ref Cfgs;
 
 timefd: ref Sys->FD;
 errorfd: ref Sys->FD;
@@ -265,10 +264,12 @@ init(nil: ref Draw->Context, args: list of string)
 	http = load Http Http->PATH;
 	http->init(bufio);
 
-	(configs, err) = Cfgs.init("/dev/null");
+	cfgs: ref Cfgs;
+
+	(cfgs, err) = Cfgs.init("/dev/null");
 	if(err != nil)
 		fail("making empty config: "+err);
-	defcfg := configs.default;
+	defcfg := cfgs.default;
 
 	arg := load Arg Arg->PATH;
 	arg->init(args);
@@ -282,29 +283,29 @@ init(nil: ref Draw->Context, args: list of string)
 			}
 		'C' =>	defcfg.cachesecs = int arg->earg();
 		'L' =>	defcfg.listings++;
-		'a' =>	configs.addrs = arg->earg()::configs.addrs;
+		'a' =>	cfgs.addrs = arg->earg()::cfgs.addrs;
 		'c' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), Cgi)::defcfg.cgipaths;
-		'd' =>	debugflag = configs.debugflag++;
+		'd' =>	cfgs.debugflag++;
 		'f' =>	ctlchan = arg->earg();
-		'h' =>	vhostflag = configs.vhostflag++;
+		'h' =>	cfgs.vhostflag++;
 		'i' =>	defcfg.indexfiles = arg->earg()::defcfg.indexfiles;
 		'l' =>	logfile := arg->earg();
-			configs.accessfd = sys->open(logfile, Sys->OWRITE);
-			if(configs.accessfd == nil)
+			cfgs.accessfd = sys->open(logfile, Sys->OWRITE);
+			if(cfgs.accessfd == nil)
 				fail(sprint("open logfile %q: %r", logfile));
-			sys->seek(configs.accessfd, big 0, Sys->SEEKEND);
+			sys->seek(cfgs.accessfd, big 0, Sys->SEEKEND);
 
 		'n' =>
 			file := arg->earg();
-			(configs, err) = Cfgs.init(file);
+			(cfgs, err) = Cfgs.init(file);
 			if(err != nil) {
 				fprint(fildes(2), "reading %q: %s\n", file, err);
 				raise "fail:usage";
 			}
-			defcfg = configs.default;
+			defcfg = cfgs.default;
 			defcfg.rev();
-			configs.usertypes = rev(configs.usertypes);
-			configs.addrs = rev(configs.addrs);
+			cfgs.usertypes = rev(cfgs.usertypes);
+			cfgs.addrs = rev(cfgs.addrs);
 		'r' =>
 			(restr, rulestr) := (arg->earg(), arg->earg());
 			(repl, rerr) := Repl.parse(restr, rulestr);
@@ -314,7 +315,7 @@ init(nil: ref Draw->Context, args: list of string)
 			}
 			defcfg.redirs = repl::defcfg.redirs;
 		's' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), Scgi)::defcfg.cgipaths;
-		't' =>	configs.usertypes = ref (arg->earg(), arg->earg())::configs.usertypes;
+		't' =>	cfgs.usertypes = ref (arg->earg(), arg->earg())::cfgs.usertypes;
 		* =>	arg->usage();
 		}
 	args = arg->argv();
@@ -322,8 +323,8 @@ init(nil: ref Draw->Context, args: list of string)
 		arg->usage();
 	webroot = hd args;
 	defcfg.rev();
-	configs.usertypes = rev(configs.usertypes);
-	configs.addrs = rev(configs.addrs);
+	cfgs.usertypes = rev(cfgs.usertypes);
+	cfgs.addrs = rev(cfgs.addrs);
 	credempty = base64->enc(array of byte ":");	# empty-user:empty-pass
 
 	environment = env->getall();
@@ -361,11 +362,11 @@ init(nil: ref Draw->Context, args: list of string)
 	warnch = chan of (int, string);
 	spawn warner();
 
-	cfglookupch = chan of (string, string, chan of ref Cfg);
-	cfgnewch = chan of ref Cfgs;
-	spawn cfgserver();
+	cfgsgetch = chan of chan of ref Cfgs;
+	newcfgsch = chan of ref Cfgs;
+	spawn cfgsserver();
 
-	cfgnewch <-= configs;
+	newcfgsch <-= cfgs;
 
 	cgispawnch = chan of (string, string, string, ref Op, big, chan of (ref Sys->FD, ref Sys->FD, string));
 	spawn cgispawner();
@@ -373,9 +374,9 @@ init(nil: ref Draw->Context, args: list of string)
 	scgidialch = chan of (string, chan of (ref Sys->FD, string));
 	spawn scgidialer();
 
-	if(configs.addrs == nil)
-		configs.addrs = defaddr::nil;
-	for(addrs := rev(configs.addrs); addrs != nil; addrs = tl addrs) {
+	if(cfgs.addrs == nil)
+		cfgs.addrs = defaddr::nil;
+	for(addrs := rev(cfgs.addrs); addrs != nil; addrs = tl addrs) {
 		addr := hd addrs;
 		(aok, aconn) := sys->announce(addr);
 		if(aok != 0)
@@ -422,6 +423,19 @@ killer()
 		kill(pid);
 	(pid, timeout, respch) := <-killschedch =>
 		spawn timeoutkill(pid, timeout, respch);
+	}
+}
+
+cfgsserver()
+{
+	cfgs: ref Cfgs;
+
+	for(;;) alt {
+	respch := <-cfgsgetch =>
+		respch <-= cfgs;
+	cfgs = <-newcfgsch =>
+		# non-atomic wrt other threads...  not much to do about it
+		debugflag = cfgs.debugflag;
 	}
 }
 
@@ -561,20 +575,23 @@ ctlhandler(fio: ref Sys->FileIO)
 			s = s[:len s-1];
 		case s {
 		"reload" =>
-			if(configs.db.reopen() != 0) {
+			cfgsgetch <-= respch := chan of ref Cfgs;
+			cfgs := <-respch;
+
+			if(cfgs.db.reopen() != 0) {
 				msg := sprint("reopening config file: %r");
 				warn(0, msg);
 				wc <-= (0, msg);
 				continue;
 			}
-			(nconfigs, err) := cfgsread(configs.file, configs.db);
+			(ncfgs, err) := Cfgs.read(cfgs.file, cfgs.db);
 			if(err != nil) {
 				msg := "error reloading config, keeping current: "+err;
 				warn(0, msg);
 				wc <-= (0, msg);
 				continue;
 			}
-			cfgnewch <-= nconfigs;
+			newcfgsch <-= ncfgs;
 			warn(0, "config file reloaded");
 			wc <-= (len data, nil);
 		* =>
@@ -605,7 +622,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 	if(b == nil)
 		die(id, sprint("bufio open: %r"));
 
-	op := ref Op(id, 0, 0, 0, big 0, fd, b, rhost, rport, lhost, lport, nil, nil, nil);
+	op := ref Op(id, 0, 0, 0, big 0, fd, b, rhost, rport, lhost, lport, nil, nil, nil, nil);
 
 	for(nsrvs := 0; ; nsrvs++) {
 		if(nsrvs > 0 && !op.keepalive)
@@ -618,6 +635,7 @@ httpserve(fd: ref Sys->FD, conndir: string)
 		op.length = big -1;
 		op.req = nil;
 		op.resp = nil;
+		op.cfgs = nil;
 		op.cfg = nil;
 		httptransact(pid, b, op);
 	}
@@ -634,6 +652,9 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	killpid := <-respch;
 
 	(req, rerr) := Req.read(b);
+	cfgsgetch <-= cfgsrespch := chan of ref Cfgs;
+	op.cfgs = <-cfgsrespch;
+
 	hdrs.add("date", httpdate(op.now));
 	if(rerr != nil || req.major != 1) {
 		st := Ebadrequest;
@@ -686,12 +707,12 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(str->drop(host, "0-9a-zA-Z.:-") != nil || str->splitstrl(host, "..").t1 != nil)
 		return responderrmsg(op, Ebadrequest, nil);
 
-	op.cfg = cfg := configlookup(host, op.lport);
+	cfg := op.cfg = op.cfgs.find(host, op.lport);
 	if(cfg == nil)
 		return responderrmsg(op, Enotfound, nil);
 
 	# do not accept request when doing vhost and request is from ip that we shouldn't serve host:port on
-	if(vhostflag && cfg.listens != nil) {
+	if(op.cfgs.vhostflag && cfg.listens != nil) {
 		addrokay := 0;
 		for(ls := cfg.listens; !addrokay && ls != nil; ls = tl ls) {
 			(chost, cport) := *(hd ls);
@@ -733,7 +754,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	# we ignore the port in the host-header.  this is illegal according to rfc2616, but using it is just silly.
 	# also, we violate rfc2616 by sending 404 "not found" when the host doesn't exist.
 	# we should send 400 "bad request" then, but that is just silly too.
-	if(vhostflag) {
+	if(op.cfgs.vhostflag) {
 		hostdir: string;
 		if(cfg.host != "") {
 			hostdir = cfg.host+":"+cfg.port;
@@ -942,7 +963,7 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 	resp := op.resp;
 
 	if(debugflag) say(id, "doing plain file");
-	ct := mimetype(path);
+	ct := mimetype(op.cfgs, path);
 	resp.h.add("content-type", ct);
 	op.length = dir.length;
 	resp.h.add("content-length", string op.length);
@@ -1483,8 +1504,8 @@ accesslog(op: ref Op)
 		sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg,
 		length,
 		op.req.h.get("user-agent"), op.req.h.get("referer"));
-	if(accessfd != nil)
-		fprint(accessfd, "%s\n", s);
+	if(op.cfgs.accessfd != nil)
+		fprint(op.cfgs.accessfd, "%s\n", s);
 	if(debugflag) say(op.id, "accesslog: "+s);
 }
 
@@ -1512,9 +1533,9 @@ suffix(suf, s: string): int
 	return suf == s[len s-len suf:];
 }
 
-mimetype(path: string): string
+mimetype(cfgs: ref Cfgs, path: string): string
 {
-	for(t := usertypes; t != nil; t = tl t)
+	for(t := cfgs.usertypes; t != nil; t = tl t)
 		if(suffix((hd t).t0, path))
 			return (hd t).t1;
 	for(i := 0; i < len mimetypes; i++)
@@ -1830,50 +1851,10 @@ Cfgs.init(file: string): (ref Cfgs, string)
 	db := Db.open(file);
 	if(db == nil)
 		return (nil, sprint("open config %q: %r", file));
-	return cfgsread(file, db);
+	return Cfgs.read(file, db);
 }
 
-configlookup(host, port: string): ref Cfg
-{
-	cfglookupch <-= (host, port, respch := chan of ref Cfg);
-	return <-respch;
-}
-
-cfgfind(c: ref Cfgs, host, port: string): ref Cfg
-{
-	for(l := c.cfgs; l != nil; l = tl l) {
-		(chost, cport, config) := hd l;
-		if(host == chost && port == cport)
-			return config;
-	}
-	return nil;
-}
-
-cfgserver()
-{
-	c: ref Cfgs;
-
-	for(;;) alt {
-	(host, port, respch) := <-cfglookupch =>
-		cfg := c.default;
-		if(vhostflag) {
-			cfg = cfgfind(c, host, port);
-			if(cfg == nil)
-				cfg = c.default;
-		}
-		respch <-= cfg;
-
-	c = <-cfgnewch =>
-		# change global variables, not atomic, should be...
-		accessfd = c.accessfd;
-		debugflag = c.debugflag;
-		vhostflag = c.vhostflag;
-		usertypes = c.usertypes;
-		configs = c;
-	}
-}
-
-cfgsread(file: string, db: ref Db): (ref Cfgs, string)
+Cfgs.read(file: string, db: ref Db): (ref Cfgs, string)
 {
 	c := ref Cfgs(file, db, Cfg.new(), nil, nil, 0, 0, nil, nil);
 	logfile: string;
@@ -1939,7 +1920,7 @@ cfgsread(file: string, db: ref Db): (ref Cfgs, string)
 		port := e.findfirst("port");
 		if(port == nil)
 			port = "80";
-		(cfg, err) := cfgread(e, port);
+		(cfg, err) := Cfg.read(e, port);
 		if(err != nil)
 			return (nil, err);
 		if(host == "*")
@@ -1969,7 +1950,7 @@ cfgsread(file: string, db: ref Db): (ref Cfgs, string)
 			useport = port;
 		if(usehost == host && useport == port)
 			return (nil, "alias line aliases host and port to itself, ignoring");
-		cfg := cfgfind(c, usehost, string int useport);
+		cfg := c.find(usehost, string int useport);
 		if(cfg == nil)
 			return (nil, sprint("alias references non-existing usehost=%q useport=%q", usehost, useport));
 		c.cfgs = (host, string int port, cfg)::c.cfgs;
@@ -1987,21 +1968,23 @@ cfgsread(file: string, db: ref Db): (ref Cfgs, string)
 	return (c, nil);
 }
 
+Cfgs.find(c: self ref Cfgs, host, port: string): ref Cfg
+{
+	for(l := c.cfgs; l != nil; l = tl l) {
+		(chost, cport, config) := hd l;
+		if(host == chost && port == cport)
+			return config;
+	}
+	return nil;
+}
+
+
 Cfg.new(): ref Cfg
 {
 	return ref Cfg("", "80", 0, -1, nil, nil, nil, nil, nil);
 }
 
-Cfg.rev(cfg: self ref Cfg)
-{
-	cfg.listens = rev(cfg.listens);
-	cfg.cgipaths = rev(cfg.cgipaths);
-	cfg.indexfiles = rev(cfg.indexfiles);
-	cfg.redirs = rev(cfg.redirs);
-	cfg.auths = rev(cfg.auths);
-}
-
-cfgread(e: ref Dbentry, defaultport: string): (ref Cfg, string)
+Cfg.read(e: ref Dbentry, defaultport: string): (ref Cfg, string)
 {
 	cfg := Cfg.new();
 
@@ -2078,6 +2061,15 @@ cfgread(e: ref Dbentry, defaultport: string): (ref Cfg, string)
 	}
 	cfg.rev();
 	return (cfg, nil);
+}
+
+Cfg.rev(cfg: self ref Cfg)
+{
+	cfg.listens = rev(cfg.listens);
+	cfg.cgipaths = rev(cfg.cgipaths);
+	cfg.indexfiles = rev(cfg.indexfiles);
+	cfg.redirs = rev(cfg.redirs);
+	cfg.auths = rev(cfg.auths);
 }
 
 
