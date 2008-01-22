@@ -637,18 +637,23 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	hdrs.add("date", httpdate(op.now));
 	if(rerr != nil || req.major != 1) {
 		st := Ebadrequest;
-		if(req.major != 1) {
+		if(rerr == nil) {
 			st = Ebadversion;
 			rerr = sprint("Version requested is HTTP/%d.%d", req.major, req.minor);
 		}
+
 		stmsg := statusmsg(st);
 		op.resp = Resp.mk(HTTP_10, string st, stmsg, hdrs);
+
 		html := array of byte mkhtml(sprint("%d - %s: %s", st, stmsg, rerr));
+
 		op.resp.h.add("content-type", "text/html; charset=utf-8");
 		op.resp.h.add("content-length", string len html);
+
 		err := hresp(op.resp, op.fd, 0, 0);
 		if(err == nil)
 			sys->write(op.fd, html, len html);
+
 		killch <-= killpid;
 		die(id, "reading request: "+rerr);
 	}
@@ -661,6 +666,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	(contoks, conerr) := tokenize(req.h.getlist("connection"));
 	if(conerr != nil || len contoks == 0 && req.h.has("connection", nil))
 		return responderrmsg(op, Ebadrequest, sprint("Bad Request: Bad value for header \"Connection\""));
+
 	op.keepalive = req.version() >= HTTP_11 && conerr == nil && !listhas(contoks, "close");
 	op.resp = resp := Resp.mk(req.version(), "200", "OK", hdrs);
 
@@ -679,6 +685,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	host := splithost(req.h.get("host")).t0;
 	if(str->drop(host, "0-9a-zA-Z.:-") != nil || str->splitstrl(host, "..").t1 != nil)
 		return responderrmsg(op, Ebadrequest, nil);
+
 	op.cfg = cfg := configlookup(host, op.lport);
 	if(cfg == nil)
 		return responderrmsg(op, Enotfound, nil);
@@ -703,7 +710,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	GET or HEAD or POST =>
 		;
 	TRACE =>
-		# note: the response does not have * as path, but /
+		# bug: the response does not have * as path, but /
 		return respond(op, Eok, req.pack(), "message/http");
 
 	OPTIONS =>
@@ -1218,18 +1225,6 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 	}
 
 
-
-
-		if(req.version() >= HTTP_11 && (expect := req.h.getlist("expect")) != nil) {
-			# we are not compliant here, values such as "100-continue, " are valid and must be treated as "100-continue"
-			# however, that is too much of a pain to parse (well, it gets much more complex, for no good reason).
-			# tough luck sir bloat!
-			if(str->tolower(expect) != "100-continue")
-				return responderrmsg(op, Eexpectationfailed, sprint("Expectectation Failed: Unrecognized expectation:  %s", expect));
-			fprint(op.fd, "HTTP/1.1 100 Continue\r\n\r\n");
-		}
-
-
 	# we always want a "status: ..." line from the cgi program.  it would be better if we would
 	# generate a "200 ok" if the status is missing, but we cannot parse the full http request
 	# after we've already read the first line (with a header in it) from the iobuf...
@@ -1250,7 +1245,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 
 		if(!str->prefix("status:", str->tolower(l))) {
 			warn(id, sprint("bad cgi response line: %q", l));
-			return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
+			return responderrmsg(op, Eservererror, "Internal Server Error: Handler sent bad response line");
 		}
 		l = str->drop(l[len "status:":], " \t");
 		(resp.st, resp.stmsg) = str->splitstrl(l, " ");
@@ -1258,13 +1253,13 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 			resp.stmsg = droptl(resp.stmsg[1:], " \t");
 		if(len resp.st != 3 || str->drop(resp.st, "0-9") != "") {
 			warn(id, sprint("bad cgi response line: %q", l));
-			return responderrmsg(op, Eservererror, "Internal Server Error:  Handler sent bad response line");
+			return responderrmsg(op, Eservererror, "Internal Server Error: Handler sent bad response line");
 		}
 
 		(hdrs, rerr) = Hdrs.read(sb);
 		if(rerr != nil) {
 			warn(id, "reading cgi headers: "+rerr);
-			return responderrmsg(op, Eservererror, "Internal Server Error:  Error reading headers from handler");
+			return responderrmsg(op, Eservererror, "Internal Server Error: Error reading headers from handler");
 		}
 
 		if(needcontinue) {
@@ -1282,7 +1277,7 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 		elengthstr := hdrs.get("content-length");
 		if(elengthstr == nil || str->drop(elengthstr, "0-9") != "") {
 			warn(id, sprint("bad cgi content-length header: %q", elengthstr));
-			return responderrmsg(op, Eservererror, "Internal Server Error:  Invalid content-length from handler");
+			return responderrmsg(op, Eservererror, "Internal Server Error: Invalid content-length from handler");
 		}
 		op.length = elength = big elengthstr;
 	}
