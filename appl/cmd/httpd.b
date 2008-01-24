@@ -1364,8 +1364,12 @@ cgifunnel(id: int, b: ref Iobuf, sfd: ref Sys->FD, length: big)
 			die(id, sprint("cgi read: %r"));
 		if(n == 0)
 			die(id, "cgi read: premature eof");
-		if(sys->write(sfd, d, n) != n)
-			die(id, sprint("cgi write: %r"));
+		{
+			if(sys->write(sfd, d, n) != n)
+				die(id, sprint("cgi write: %r"));
+		} exception {
+		* =>	die(id, sprint("cgi write: write on broken pipe"));
+		}
 		length -= big n;
 	}
 }
