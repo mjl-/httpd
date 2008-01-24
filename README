@@ -14,41 +14,34 @@ features:
 - as compliant as possible, where reasonable
 - mindful of security
 
-install
+see the manual page for full documentation
+
+
+# install
 
 to install this software, make sure there is a mkconfig file in
 this directory.  you can symlink/bind the one from your inferno
 installation.  next, type "mk install".  httpd depends on package
-"http", the http library, published using mercurial:  hg clone
-static-http://www.ueber.net/who/mjl/hg/http/.
+"http", the http library, published using mercurial.  get it by:
 
-latest version
+	hg clone static-http://www.ueber.net/who/mjl/hg/http/
+
+
+# latest version
 
 this code is kept up to date using mercurial, to get a fresh copy:
 
 	hg clone static-http://www.ueber.net/who/mjl/hg/httpd/
 
-licence
+
+# licence
 
 all files written by me (i.e. all except the rfcs in doc/) are
 in the public domain.  for bugs, questions, comments, etc., contact
 me at mechiel@ueber.net or mechiel@xs4all.nl.
 
 
-testing:
-- better configurability/syntax for doing redirect/scgi/auth/others based on hostname/port?
-	- aliases for host/port configs
-	- verify local ip is in allowed list for request
-	- if no listen ips have been specified, allow on all.  if any has been specified, enforce.
-	- use host:port for vhost dirs
-	- config reloading.  on explicit request only?  over file2chan thing
-	- make sure command-line options make sense now (work)
-	- do all changeable config options work after reload?
-- redirects based on path rewriting?
-- accesslog optional
-- find rfc that handles ip6 addresses in host-header, and understand them with port
-- "accesslog" in config file, and reloading works
-- write events to error log:  started, reloaded
+# testing/todo
 
 todo:
 - more testing

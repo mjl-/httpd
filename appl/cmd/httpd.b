@@ -1497,11 +1497,11 @@ accesslog(op: ref Op)
 	if(!op.chunked && op.length >= big 0)
 		length = string op.length;
 
-	s := sprint("%d %d %s!%s %s!%s %q %q %q %q %q %q %q %q %q",
+	s := sprint("%d %d %s!%s %s!%s %q %q %q HTTP/%d.%d %q %q %q %q %q",
 		op.id, op.now,
 		op.rhost, op.rport, op.lhost, op.lport,
-		http->methodstr(op.req.method), op.req.h.get("host"), op.req.url.path,
-		sprint("HTTP/%d.%d", op.req.major, op.req.minor), op.resp.st, op.resp.stmsg,
+		http->methodstr(op.req.method), op.req.h.get("host"), op.req.url.path+op.req.url.query,
+		op.req.major, op.req.minor, op.resp.st, op.resp.stmsg,
 		length,
 		op.req.h.get("user-agent"), op.req.h.get("referer"));
 	if(op.cfgs.accessfd != nil)
