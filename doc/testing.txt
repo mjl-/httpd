@@ -1,0 +1,1166 @@
+# start httpd for testing
+
+emu -c0
+repo=src/httpd
+bind '#U*/home' /usr; bind -b '#s' /chan; ndb/cs; cd; home=`{pwd}; cd $home/$repo/appl/cmd; sblpath=(/dis .)
+bind -a $home/$repo $home/$repo/testroot/localhost:8000
+bind -a $home/$repo/man $home/$repo/testroot/_default:8000
+./httpd -n $home/$repo/doc/ndb-testhttpd $home/$repo/testroot
+
+
+emu -c0
+repo=src/scgid
+bind '#U*/home' /usr; ndb/cs; cd; home=`{pwd}; cd $home/$repo/appl/cmd; sblpath=(/dis .)
+./scgid ../../doc/scgid.conf	# has handler on net!localhost!4006
+
+cmd='telnet localhost 8000'
+cmd2='telnet localhost 8001'
+
+# plain file, http/1.0 and http/1.1
+
+$cmd
+GET /README HTTP/1.0
+Host: localhost:8000
+Connection: close
+
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+
+# dir listing
+
+# succesful, http/1.1
+$cmd
+GET /appl/ HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# with missing trailing slash
+# * errror 404
+$cmd
+GET /appl HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# http/1.0
+$cmd
+GET /appl/ HTTP/1.0
+Host: localhost:8000
+Connection: close
+
+
+# index file serving
+
+# index.txt
+$cmd
+GET /dir0/ HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# index.html (not index.txt due to config order)
+$cmd
+GET /dir1/ HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# no index file present
+# * serves directory listing
+$cmd
+GET /dir2/ HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+
+# redirections
+
+# absolute redir
+$cmd
+GET /redir1 HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# relative redir
+$cmd
+GET /redir2 HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# redir configured with bad groups
+# * internal server error
+$cmd
+GET /redir4 HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# redir with two escaped $'s in destination
+$cmd
+GET /redir5 HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+
+
+# mime type detection
+#	built-in
+#	user
+#	user overrides
+
+# no extension -> text/plain
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# unknown extension -> application/octet-stream
+$cmd | sed '/^$/q'
+GET /appl/cmd/httpd.sbl HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# known extension
+$cmd | sed '/^$/q'
+GET /appl/cmd/httpd.b HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# user-specified: .dis -> application/x-dis
+$cmd | sed '/^$/q'
+GET /appl/cmd/httpd.dis HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# user overriding built-in: .jpg -> testing/jpg
+$cmd | sed '/^$/q'
+GET /testing.jpg HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+
+
+# authorization
+#	where required
+#	where not allowed
+#	with empty user/pass
+
+# empty credentials where none are allowed
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+Authorization: Basic Og==
+
+# non-empty credentials where none are allowed (for sanity)
+# * error unauthorized
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+Authorization: Basic dGVzdHVzZXI6dGVzdHBhc3M=
+
+# empty credentials where required
+# * error unauthorized
+$cmd
+GET /auth0 HTTP/1.1
+Host: localhost:8000
+Connection: close
+Authorization: Basic Og==
+
+# incorrect credentials where required
+# * error unauthorized
+$cmd
+GET /auth0 HTTP/1.1
+Host: localhost:8000
+Connection: close
+Authorization: Basic YmFkOmJhZA==
+
+# missing credentials where required
+# * error unauthorized
+$cmd
+GET /auth0 HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# malformed credentials where required
+# * error unauthorized
+$cmd
+GET /auth0 HTTP/1.1
+Host: localhost:8000
+Connection: close
+Authorization: Digest test test
+
+# correct credentials where required
+$cmd
+GET /auth0 HTTP/1.1
+Host: localhost:8000
+Connection: close
+Authorization: Basic dGVzdHVzZXI6dGVzdHBhc3M=
+
+# correct credentials on http/1.0
+$cmd
+GET /auth0 HTTP/1.0
+Host: localhost:8000
+Connection: close
+Authorization: Basic dGVzdHVzZXI6dGVzdHBhc3M=
+
+
+
+# caching responses
+
+# for plain file
+$cmd | sed '/^$/q'
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# for dir listing
+$cmd
+GET /dir2/ HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+
+# range requests
+#	invalid ranges
+#	valid
+#	plain files, directory
+
+# first three bytes
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = 0-2
+Connection: close
+
+# valid, random spaces
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = 0 -2  
+Connection: close
+
+# valid, random spaces
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = 0- 2
+Connection: close
+
+# valid, random whitespace
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = 0	          - 2
+Connection: close
+
+# multipart/byteranges, with many different whitespace and different forms
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = -3, 1-, 0 - 2, 3-4, 5- 9, 10 -11100000000000000
+Connection: close
+
+# multipart/byteranges, with empty lists
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = 0-2,,,4-5
+Connection: close
+
+# bad range value, ignored
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = test
+Connection: close
+
+# bad range value, ignored
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = 10
+Connection: close
+
+# ignored for http/1.0, returns full object
+$cmd
+GET /README HTTP/1.0
+Host: localhost:8000
+Range: bytes = 0-2
+Connection: close
+
+
+
+# headers
+#	date
+#	last-modified
+#	etag (plain files, directory listings)
+#	server
+
+# do twice, check that last-modified,etag,server are same;  date is different
+$cmd | sed '/^$/q'
+GET /README HTTP/1.0
+Host: localhost:8000
+Connection: close
+
+
+
+# conditional responses
+#	if-modified-since
+#	if-unmodified-since
+#	if-match
+#	if-none-match
+#	if-range
+#	http/1.0 only does if-unmodified-since, nothing else
+
+# if modified long in past, returns new object
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-modified-since: Thu, 1  Jan 1970 01:00:01 GMT
+
+# if modified far in future
+# * error 304 precondition failed
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-modified-since: Mon, 18 Jan 2020 10:01:52 GMT
+
+# http/1.0 head must ignore the if-modified-since...
+$cmd 
+HEAD /README HTTP/1.0
+Host: localhost:8000
+if-modified-since: Mon, 18 Jan 2020 10:01:52 GMT
+
+# if unmodified since long past
+# * error 304 precondition failed
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-unmodified-since: Thu, 1  Jan 1970 01:00:01 GMT
+
+# if unmodified since far future, will return object
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-unmodified-since: Mon, 18 Jan 2020 10:01:52 GMT
+
+# if-match *, if it exists.  returns object
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-match: *
+
+# NOTE: etag for README is "9207a52c44a572f6f8f36947216d395c6d05984a", replace by current for testing
+# if-match correct-tag, returns object
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-match: "9207a52c44a572f6f8f36947216d395c6d05984a"
+
+# incorrect tag, 412 precondition failed
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-match: "flierp"
+
+# correct tag, but as weak
+# * error 412 precondition failed
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-match: W/"9207a52c44a572f6f8f36947216d395c6d05984a"
+
+# bad syntax for if-match
+# * error 412 precondition failed
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-match: bad syntax
+
+# if-none-match *, if no such file
+# * error 304 not modified
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-none-match: *
+
+# if-none-match correct tag
+# * error 304 not modified
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-none-match: "9207a52c44a572f6f8f36947216d395c6d05984a"
+
+# if-none-match on non-existent file
+# * error 404 object not found
+$cmd
+GET /nosuchfile HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-none-match: "9207a52c44a572f6f8f36947216d395c6d05984a"
+
+# if-none-match, bogus tag, returns file
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-none-match: "bogustag"
+
+# if-none-match, bad syntax, returns file
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-none-match: bad syntax
+
+# if-range with matching etag, returns partial response
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = 0-1
+Connection: close
+If-Range: "9207a52c44a572f6f8f36947216d395c6d05984a"
+
+# if-range with bad syntax for range, returns full response
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = bad syntax
+Connection: close
+If-Range: "9207a52c44a572f6f8f36947216d395c6d05984a"
+
+# if-range with non-matching etag, returns full body
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = 0-2
+Connection: close
+If-Range: "flierp"
+
+# if-range with time in past, returns full body
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = 0-2
+Connection: close
+if-range: Thu, 1  Jan 1970 01:00:01 GMT
+
+# if-range with time in future, returns 206 partial content
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = 0-2
+Connection: close
+if-range: Mon, 18 Jan 2020 10:01:52 GMT
+
+# now for some http/1.0 conditional requests
+
+# if modified since far in future, only conditional http/1.0 supports
+# * error 304
+$cmd
+GET /README HTTP/1.0
+Host: localhost:8000
+Connection: close
+if-modified-since: Mon, 18 Jan 2020 10:01:52 GMT
+
+# if unmodified since long past, 304 for http/1.1, http/1.0 ignores it
+$cmd
+GET /README HTTP/1.0
+Host: localhost:8000
+Connection: close
+if-unmodified-since: Thu, 1  Jan 1970 01:00:01 GMT
+
+# if-match, incorrect tag, 412 precondition failed for http/1.1, http/1.0 ignores it
+$cmd
+GET /README HTTP/1.0
+Host: localhost:8000
+Connection: close
+if-match: "flierp"
+
+# if-none-match *, if no such file.  304 for http/1.1, ignored for http/1.0
+$cmd
+GET /README HTTP/1.0
+Host: localhost:8000
+Connection: close
+if-none-match: *
+
+# if-range with matching etag, returns partial response for http/1.1, ignored for http/1.0
+$cmd
+GET /README HTTP/1.0
+Host: localhost:8000
+Range: bytes = 0-1
+Connection: close
+If-Range: "9207a52c44a572f6f8f36947216d395c6d05984a"
+
+# if-range with bad syntax for range, returns full response
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = bad syntax
+Connection: close
+If-Range: "9207a52c44a572f6f8f36947216d395c6d05984a"
+
+# if-range with non-matching etag, returns full body
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = 0-2
+Connection: close
+If-Range: "flierp"
+
+# if-range with time in past, returns full body
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = 0-2
+Connection: close
+if-range: Thu, 1  Jan 1970 01:00:01 GMT
+
+# if-range with time in future, returns 206 partial content
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Range: bytes = 0-2
+Connection: close
+if-range: Mon, 18 Jan 2020 10:01:52 GMT
+
+# xxx test multiple etags, with "-quoting for http/1.1 vs http/1.0
+
+
+# config, alias
+
+# config, default alias (unknown hostname)
+$cmd
+GET / HTTP/1.1
+Host: 127.0.0.1:8000
+Connection: close
+
+# serves files just like localhost:8000
+$cmd
+GET /README HTTP/1.1
+Host: localhost.local:8000
+Connection: close
+
+# bogus host (_default:port) does not have /README
+# * error 404
+$cmd
+GET /README HTTP/1.1
+Host: bogus:8000
+Connection: close
+
+
+# virtual hosts
+
+# change vhost to nohost and reload config.  returns listing of hostdirs
+$cmd
+GET / HTTP/1.1
+Host: bogus
+Connection: close
+
+# same, specifying a valid host has no effect
+$cmd
+GET / HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# enable vhosts again, reload config
+
+# known host:port
+$cmd
+GET / HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# known host, but missing port in host-header.  still returns valid data since we connected to right address
+$cmd
+GET / HTTP/1.1
+Host: localhost
+Connection: close
+
+# known host, missing port, connect to other ip where we are not allowed for this host
+# * error 404 object not found
+$cmd2
+GET /README HTTP/1.1
+Host: localhost
+Connection: close
+
+
+# known host, correctport, connect to other ip where we are not allowed for this host
+# * error 404 object not found
+$cmd2
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# connect using ip as hostname, not configured
+# * error 404
+$cmd
+GET /README HTTP/1.1
+Host: 127.0.0.1:8000
+Connection: close
+
+# connect using ip as hostname, configured, returns file
+$cmd
+GET /README HTTP/1.1
+Host: 127.0.0.2:8000
+Connection: close
+
+# try ip6, for fun
+$cmd
+GET /README HTTP/1.1
+Host: [::1]:8000
+Connection: close
+
+# bogus ip6-like
+# * error 400
+$cmd
+GET /README HTTP/1.1
+Host: [::1
+Connection: close
+
+# bogus ip6-like
+# * error 404
+$cmd
+GET /README HTTP/1.1
+Host: ::1
+Connection: close
+
+# xxx, but does
+# bogus, should not succeed
+$cmd
+GET /README HTTP/1.1
+Host: [localhost]:8000
+Connection: close
+
+# default config
+# ./httpd -n /dev/null -d -a 'net!*!8000' $home/$repo/testroot
+
+# should return normal response
+$cmd
+GET /_default:8000 HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+
+# ctl chan: reload config
+# verify whether it works
+echo reload >/chan/httpd
+
+# make change that breaks config, after reload it should keep config and still work
+echo reload >/chan/httpd
+
+
+# command-line options: overrides config/ignored
+
+# start simple httpd:
+# ./httpd $home/$repo/testroot
+
+# request succeeds!
+$cmd
+GET /localhost:8000/README HTTP/1.1
+Host: bogus
+Connection: close
+
+
+# start httpd with config and with conflicting options, before and after loading config
+# ./httpd -h -d -a 'net!*!8001' -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 -c /cgi '{echo blah}' -t .txt test/flierp -n /dev/null -a 'net!*!8000' $home/$repo/testroot
+
+# now, all those options should be off except -f, and we should be listening on port 8000 now.
+
+# normal get should work, should not do caching
+$cmd
+GET /localhost:8000/README HTTP/1.1
+Host: bogus
+Connection: close
+
+# should refuse connection
+$cmd2
+
+# directory listings not configured
+# * error 404
+$cmd
+GET /localhost:8000/ HTTP/1.1
+Host: bogus
+Connection: close
+
+# no index file serving and no listings
+# * error 404
+$cmd
+GET /_default:8000/ HTTP/1.1
+Host: bogus
+Connection: close
+
+
+# this time, these options should still be used
+# ./httpd  -n /dev/null -d -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 -c /cgi '{echo blah}' -t .txt test/flierp -a 'net!*!8000' $home/$repo/testroot
+
+# returns listing of testroot
+$cmd
+GET / HTTP/1.1
+Host: 
+Connection: close
+
+
+
+# old http version, should return 505 http version not supported (or perhaps something else)
+# * error 505
+$cmd
+GET / HTTP/0.9
+Host: bogus
+Connection: close
+
+# new minor http version, should work as http/1.1
+$cmd
+GET /README HTTP/1.2
+Host: localhost:8000
+Connection: close
+
+# new major http version, should send 505
+# * error 505
+$cmd
+GET / HTTP/2.123
+Host: localhost:8000
+Connection: close
+
+# other methods
+
+# options.  this returns a page with "200 - OK" on it, fine by us
+$cmd
+OPTIONS * HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# options, host header must still be present, though it is not used
+$cmd
+OPTIONS * HTTP/1.1
+Connection: close
+
+# options does not exist in http/1.0
+# * error 501
+$cmd
+OPTIONS * HTTP/1.0
+Connection: close
+
+# trace.  this returns the request as message/http.  note that it changes the * to a /
+$cmd
+TRACE * HTTP/1.1
+Host: localhost:8000
+Connection: close
+X-Try: me
+
+# http/1.0 did not know trace
+# * error 501
+$cmd
+TRACE * HTTP/1.0
+Host: localhost:8000
+Connection: close
+X-Try: me
+
+# connect, not supported, obviously
+# * error 501
+$cmd
+CONNECT * HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# put not implemented
+# * error 501
+$cmd
+PUT / HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# delete not implemented
+# * error 501
+$cmd
+DELETE / HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# put not known in http/1.0
+$cmd
+PUT / HTTP/1.0
+Host: localhost:8000
+Connection: close
+
+# delete not knowni n http/1.0
+$cmd
+DELETE / HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# keepalive connections, closes after third request, since keepalive is onl for http/1.1
+$cmd
+GET / HTTP/1.1
+Host: localhost:8000
+
+GET /README HTTP/1.1
+Host: localhost:8000
+
+GET / HTTP/1.0
+Host: localhost:8000
+
+
+
+# invalid request
+
+# missing http version
+# * 400 bad request
+$cmd
+GET / 
+
+# nothing after path
+# * 400 bad request
+$cmd
+GET /
+
+# missing path and version
+# * 400 bad request
+$cmd
+GET 
+
+# nothing after method
+# * 400 bad request
+$cmd
+GET
+
+# missing path
+# * 400 bad request
+$cmd
+GET HTTP/1.1
+
+# xxx is empty path valid?
+# empty path
+$cmd
+GET  HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# xxx returns 400 bad request
+# unknown method
+# * 501 not implemented
+$cmd
+TEST / HTTP/1.1
+
+# xxx 400 bad request
+# lower case, invalid (right? xxx)
+# * 501 not implemented
+$cmd
+get / HTTP/1.1
+
+# lower case version
+# * 400 bad request
+$cmd
+GET / http/1.1
+
+# normal head
+$cmd
+HEAD / HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+
+# trikcy headers
+
+# continuation header on first line of headers
+# * 400
+$cmd
+GET / HTTP/1.1
+ continuation: on first line
+
+
+# missing value for header
+# * 400
+$cmd
+GET / HTTP/1.1
+Host: localhost:8000
+badheader
+
+# invalidly duplicate headers
+# * 400
+$cmd
+GET / HTTP/1.1
+Host: localhost:8000
+Host: localhost:8000
+Connection: close
+
+# multiple connections is valid, all unknown values should be treated as header-names
+$cmd
+GET / HTTP/1.1
+Host: localhost:8000
+Connection: close
+Connection: test
+
+# duplicate
+# * 400
+$cmd
+GET / HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-match: "a"
+if-match: "b"
+
+# duplicate
+# * 400
+$cmd
+GET / HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-none-match: "a"
+if-none-match: "b"
+
+# duplicate
+# * 400
+$cmd
+GET / HTTP/1.1
+Host: localhost:8000
+Connection: close
+authorization: Basic "test"
+authorization: Basic "test"
+
+# note: there are a few more headers that cannot be specified twice
+
+# we are not a proxy, we don't want random credentials sent to us
+# * 400
+$cmd
+GET / HTTP/1.1
+Host: localhost:8000
+Connection: close
+proxy-authorization: Basic "test"
+
+# header continuations
+$cmd
+GET / HTTP/1.1
+Host:
+ localhost:8000                  
+Connection: test, test2 ,,test4            ,
+  ,test5
+	,close
+X-Test: yes
+
+
+
+# cgi
+
+# get with query string.  has valid QUERY_STRING, etc.
+$cmd
+GET /cgi0?q=test HTTP/1.1
+Connection: close
+Host: localhost:8000
+
+# and with keep-alive
+$cmd
+GET /cgi0?q=test HTTP/1.1
+Host: localhost:8000
+
+# http/1.0 does not send content-length and closes connection
+$cmd
+GET /cgi0?q=test HTTP/1.0
+Host: localhost:8000
+
+# post without content-length
+# * 411
+$cmd
+POST /cgi0?q=test HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# post without content-length on http/1.0 causes "bad request"
+# * 400
+$cmd
+POST /cgi0?q=test HTTP/1.0
+Host: localhost:8000
+
+# identity is default, and only supported
+$cmd
+POST /cgi0?q=test HTTP/1.1
+Host: localhost:8000
+transfer-encoding: identity
+content-length: 0
+connection: close
+
+# chunked transfer-encoding not allowed from client
+# * 501 not implemented
+$cmd
+POST /cgi0?q=test HTTP/1.1
+Host: localhost:8000
+transfer-encoding: chunked
+content-length: 0
+connection: close
+
+# transfer-encoding  is valid, but obscure, so we don't allow it (xxx?)
+# * 501 not implemented
+$cmd
+POST /cgi0?q=test HTTP/1.1
+Host: localhost:8000
+transfer-encoding: identity, identity
+content-length: 0
+connection: close
+
+# identity content-encoding is the default
+$cmd
+POST /cgi0?q=test HTTP/1.1
+Host: localhost:8000
+content-encoding: identity
+content-length: 0
+connection: close
+
+# this content-encoding is valid, but obscure, so we don't allow it (xxx?)
+# * 501 not implemented
+$cmd
+POST /cgi0?q=test HTTP/1.1
+Host: localhost:8000
+content-encoding: identity, identity
+content-length: 0
+connection: close
+
+# xxx is this the right error?
+# no compressed incoming data
+# * 501 not implemented
+$cmd
+POST /cgi0?q=test HTTP/1.1
+Host: localhost:8000
+content-encoding: gzip
+content-length: 0
+connection: close
+
+# unparsable content-length
+$cmd
+POST /cgi0?q=test HTTP/1.1
+Host: localhost:8000
+content-length: test
+connection: close
+
+
+# 100-continue expect header, generated by server
+$cmd
+POST /cgi0?q=test HTTP/1.1
+Host: localhost:8000
+content-length: 0
+connection: close
+expect: 100-continue
+
+# unknown expect header
+# * 417
+$cmd
+POST /cgi0?q=test HTTP/1.1
+Host: localhost:8000
+content-length: 0
+connection: close
+expect: test
+
+# ignore expect for http/1.0, so valid
+$cmd
+POST /cgi0?q=test HTTP/1.0
+Host: localhost:8000
+content-length: 0
+connection: close
+expect: test
+
+# cgi script is broken, no status:-line
+# * 500
+$cmd
+POST /cgi1 HTTP/1.1
+Host: localhost:8000
+content-length: 0
+connection: close
+
+# cgi script is broken, sends 100-continue and then nothing
+# * 500
+$cmd
+POST /cgi2 HTTP/1.1
+Host: localhost:8000
+connection: close
+content-length: 0
+
+# cgi script sends 100-continue, not webserver.  we don't require one
+$cmd
+POST /cgi3 HTTP/1.1
+Host: localhost:8000
+connection: close
+content-length: 0
+
+# cgi script sends 100-continue, not webserver.  we do require one.
+$cmd
+POST /cgi3 HTTP/1.1
+Host: localhost:8000
+connection: close
+content-length: 0
+expect: 100-continue 
+
+# broken cgi script, it returns a bad content-length
+# * 500
+$cmd
+GET /cgi4 HTTP/1.1
+Host: localhost:8000
+connection: close
+content-length: 0
+
+# cgi script which sets content-length
+$cmd
+GET /cgi5 HTTP/1.1
+Host: localhost:8000
+connection: close
+content-length: 0
+
+# cgi script which sets shorter content-length than it sends data
+# responds with okay, but closes connection before sending data.  this allows the client to detect the error
+$cmd
+GET /cgi6 HTTP/1.1
+Host: localhost:8000
+connection: close
+
+# even for http/1.0!
+$cmd
+GET /cgi6 HTTP/1.0
+Host: localhost:8000
+connection: close
+
+# cgi script which sets longer content-length than it sends data
+# responds with okay, but closes connection before sending data.  this allows the client to detect the error
+$cmd
+GET /cgi7 HTTP/1.1
+Host: localhost:8000
+connection: close
+
+# same for http/1.0
+$cmd
+GET /cgi7 HTTP/1.0
+Host: localhost:8000
+connection: close
+
+
+
+
+# since scgi handling is practically indentical to cgi handling, we don't do as many tests
+$cmd
+GET /scgi0 HTTP/1.0
+Host: localhost:8000
+connection: close
+
+# scgi handler that is unreachable
+$cmd
+GET /scgi1 HTTP/1.0
+Host: localhost:8000
+connection: close
+
+# cgi with incoming data, which is ignored by server
+# on incoming data, the connection is always closed afterwards
+$cmd
+POST /cgi0 HTTP/1.1
+Host: localhost:8000
+content-length: 2
+
+a

@@ -1,0 +1,59 @@
+#  echo reload >/chan/httpd
+
+debug
+vhost
+ctlchan=httpd
+#accesslog=/services/logs/httpdaccess
+announce=net!localhost!8000
+announce=net!localhost!8001
+
+mime	ext=.sig	type='application/pgp-signature'
+mime	ext=.swf	type='application/x-shockwave-flash'
+mime	ext=.m3u	type='audio/x-mpegurl'
+mime	ext=.xbm	type='image/x-xbitmap'
+mime	ext=.xpm	type='image/x-xpixmap'
+mime	ext=.asc	type='text/plain; charset=utf-8'
+mime	ext=.cpp	type='text/plain; charset=utf-8'
+mime	ext=.log	type='text/plain; charset=utf-8'
+mime	ext=.text	type='text/plain; charset=utf-8'
+mime	ext=.dtd	type='text/xml; charset=utf-8'
+mime	ext=.xml	type='text/xml; charset=utf-8'
+mime	ext=.mov	type='video/quicktime'
+mime	ext=.wmv	type='video/x-ms-wmv'
+mime	ext=.erl	type='text/plain; charset=utf-8'
+
+mime	ext=.dis	type='application/x-dis; charset=utf-8'
+mime	ext=.jpg	type='testing/jpg'
+
+host=localhost port=8000
+	cachesecs=60
+	listings
+	listen	ip=127.1
+	index	file=index.html file=index.htm file=index.txt
+	redir	src='^/redir1$'		dst=http://www.example.com/redir1
+	redir	src='^/redir2$'		dst=/redir3
+	redir	src='^/redir4$'		dst=/$0/$1
+	redir	src='^/redir5$'		dst=/$$$$
+	cgi	path=/cgi0	cmd='{load std; echo Status: 200 OK; echo content-type: text/plain; echo; cd /env && for(i in *) { echo -n $i^''=''; cat $i; echo}}'
+	cgi	path=/cgi1	cmd='{echo test}'
+	cgi	path=/cgi2	cmd='{echo Status: 100 continue}'
+	cgi	path=/cgi3	cmd='{echo Status: 100 continue; echo; echo Status: 200 OK; echo content-type: text/plain; echo; echo test}'
+	cgi	path=/cgi4	cmd='{echo Status: 200 OK; echo content-length: test; echo;}'
+	cgi	path=/cgi5	cmd='{echo Status: 200 OK; echo content-length: 1; echo content-type: text/plain; echo; echo -n a}'
+	cgi	path=/cgi6	cmd='{echo Status: 200 OK; echo content-length: 1; echo content-type: text/plain; echo; echo -n aa}'
+	cgi	path=/cgi7	cmd='{echo Status: 200 OK; echo content-length: 1; echo content-type: text/plain; echo}'
+	scgi	path=/scgi0	addr='net!localhost!4006'
+	scgi	path=/scgi1	addr='net!localhost!3999'
+	auth	path=/auth0	realm=test user=testuser pass=testpass
+
+alias
+	host='localhost.local' port=8000 usehost=localhost
+
+alias
+	host='127.0.0.2' port=8000 usehost=localhost
+alias
+	host='::1' port=8000 usehost=localhost
+
+host='*' port=8000
+	index	file=index.html file=index.htm file=index.txt
+	listings

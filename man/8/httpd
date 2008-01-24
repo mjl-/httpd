@@ -43,22 +43,30 @@ httpd \- HTTP server
 .SH DESCRIPTION
 .I Httpd
 is an HTTP server that supports most of the reasonable features of contemporary http servers:
-
-.PP
-.EX
-	* http/1.0 and http/1.1 support
-	* cgi and scgi support
-	* directory listings
-	* index file serving
-	* redirections based on regular expressions
-	* virtual hosting
-	* determining mimetype based on file extension
-	* "range" requests, for random access to files
-	* access and error logging
-	* configuration in attrdb format
-	* as compliant as possible, where reasonable
-	* mindful of security
-.EE
+.IP \(bu
+http/1.0 and http/1.1 support
+.IP \(bu
+cgi and scgi support
+.IP \(bu
+directory listings
+.IP \(bu
+index file serving
+.IP \(bu
+redirections based on regular expressions
+.IP \(bu
+virtual hosting
+.IP \(bu
+determining mimetype based on file extension
+.IP \(bu
+"range" requests, for random access to files
+.IP \(bu
+access and error logging
+.IP \(bu
+configuration in attrdb format
+.IP \(bu
+as compliant as possible, where reasonable
+.IP \(bu
+mindful of security
 
 .PP
 .I Httpd
@@ -344,6 +352,9 @@ is replaced by
 with
 .IR sys-bind (2).
 Also, suspicious combinations of headers are typically responded to with an error.  This policy may err on the cautious side.  For example, some important headers are not allowed to be specified twice.
+Note that CGI programs run in the namespace
+.I httpd
+had originally been started with.
 
 .SH SOURCE
 .B /appl/cmd/httpd.b
