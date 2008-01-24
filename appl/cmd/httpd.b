@@ -1320,6 +1320,7 @@ _cgiproc(path: string, op: ref Op, cgipath, cgiaction: string, cgitype: int, len
 	accesslog(op);
 
 	op.chunked = elength == big -1 && resp.version() >= HTTP_11;
+	op.keepalive = op.keepalive && (req.method != POST || !req.h.has("content-length", nil));
 	rerr = hresp(resp, op.fd, op.keepalive, op.chunked);
 	if(rerr != nil) {
 		warn(id, "writing response: "+rerr);
@@ -1343,6 +1344,9 @@ _cgiproc(path: string, op: ref Op, cgipath, cgiaction: string, cgitype: int, len
 				die(id, "bad cgi body, message longer than content-length specified");
 			elength -= big n;
 		}
+		# for last bit of data, verify that the handler is finished writing
+		if(elength > big n || (big n == elength && sb.read(tmp := array[1] of byte, len tmp) != 0))
+			die(id, "bad cgi body, message longer than content-length specified");
 		hwrite(op, d[:n]);
 	}
 	hwriteeof(op);
