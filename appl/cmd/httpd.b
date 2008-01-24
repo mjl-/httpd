@@ -827,23 +827,9 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		return respond(op, Emovedpermanently, html, "text/html; charset=utf-8");
 	}
 
-	# if path is cgi-handled, let cgi() handle the request
-	if(((cgipath, cgiaction, cgitype) := findcgi(cfg, path)).t1 != nil) {
-		if(debugflag) say(id, sprint("passing to (s)cgi handler, cgipath %q cgiaction %q", cgipath, cgiaction));
-
-		timeo := Cgitimeoutsecs*1000;
-		donech := chan of int;
-
-		spawn timeout(op, timeo, timeoch := chan of int, donech);
-		timeopid := <- timeoch;
-		if(timeopid < 0)
-			die(op.id, "timeout proc failed");
-		spawn cgi(path, op, cgipath, cgiaction, cgitype, timeopid, timeoch, donech);
-
-		# wait for timeout or cgi finished to occur
-		<-donech;
-		return;
-	}
+	# if path is cgi-handled
+	if(((cgipath, cgiaction, cgitype) := findcgi(cfg, path)).t1 != nil)
+		return cgi(path, op, cgipath, cgiaction, cgitype);
 
 	# path is one of:  plain file, directory (either listing or plain index file)
 	dfd := sys->open("."+path, Sys->OREAD);
@@ -1116,63 +1102,14 @@ pathurls(s: string): string
 	return r;
 }
 
-timeout(op: ref Op, timeo: int, timeoch, donech: chan of int)
+cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype: int)
 {
-	pid := sys->pctl(Sys->NEWPGRP, nil);
-	timeoch <-= pid;
-	if(pid < 0)
-		return warn(op.id, sprint("pctl: %r"));
-		
-	opid := <-timeoch;
-	sys->sleep(timeo);
-	if(debugflag) say(op.id, sprint("timeout %d ms for request, killing handler pid %d, timeopid %d", timeo, opid, pid));
-	killch <-= opid;
-	responderrmsg(op, Eservererror, "Internal Server Error: Response could not be generated in time");
-	donech <-= 0;
-}
-
-cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: int, cgich, donech: chan of int)
-{
-	# set up new process group and exception propagation so
-	# we always clean up nicely when one of the child procs dies.
-	# we always have to respond on donech (or be killed by the timeout
-	# proc) or we'll leave processes lingering
-	err: string;
-	npid := sys->pctl(Sys->NEWPGRP, nil);
-	if(npid < 0)
-		err = sprint("pctl newpgrp: %r");
-	if(err == nil) {
-		excch <-= (npid, respch := chan of string);
-		err = <-respch;
-	}
-
-	if(err != nil) {
-		killch <-= timeopid;
-		warn(op.id, err);
-		responderrmsg(op, Eservererror, nil);
-		donech <-= 0;
-		return;
-	}
-
-	# to make sure our caller can return (e.g. when writing to remote fails)
-	{
-		_cgi(path, op, cgipath, cgiaction, cgitype, timeopid, cgich);
-	} exception {
-	* =>	killch <-= timeopid;	# may already have been killed
-	}
-	donech <-= 0;
-}
-
-_cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: int, cgich: chan of int)
-{
-	# pid ends up in timeout(), this proc is killed if it doesn't respond timely
-	pid := sys->pctl(0, nil);
-	cgich <-= pid;
-
 	id := op.id;
 	req := op.req;
-	resp := op.resp;
 
+	if(debugflag) say(id, sprint("passing to (s)cgi handler, cgipath %q cgiaction %q", cgipath, cgiaction));
+
+	# first, some sanity checks on the request
 	# parsing/handling full transfer-coding is too involved for us.
 	# we are taking a short cut here to avoid feeding the bloat monster.
 	length := big 0;
@@ -1209,6 +1146,78 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 		if(debugflag) say(id, sprint("post, client content-length %bd", length));
 	}
 
+	timeo := Cgitimeoutsecs*1000;
+	donech := chan of int;
+
+	spawn timeout(op, timeo, timeoch := chan of int, donech);
+	timeopid := <- timeoch;
+	if(timeopid < 0)
+		die(op.id, "timeout proc failed");
+	spawn cgiproc(path, op, cgipath, cgiaction, cgitype, length, needcontinue, timeopid, timeoch, donech);
+
+	# wait for timeout or cgiproc
+	<-donech;
+	return;
+}
+
+timeout(op: ref Op, timeo: int, timeoch, donech: chan of int)
+{
+	pid := sys->pctl(Sys->NEWPGRP, nil);
+	timeoch <-= pid;
+	if(pid < 0)
+		return warn(op.id, sprint("pctl: %r"));
+		
+	opid := <-timeoch;
+	sys->sleep(timeo);
+	if(debugflag) say(op.id, sprint("timeout %d ms for request, killing handler pid %d, timeopid %d", timeo, opid, pid));
+	killch <-= opid;
+	responderrmsg(op, Eservererror, "Internal Server Error: Response could not be generated in time");
+	donech <-= 0;
+}
+
+cgiproc(path: string, op: ref Op, cgipath, cgiaction: string, cgitype: int, length: big, needcontinue: int, timeopid: int, cgich, donech: chan of int)
+{
+	# set up new process group and exception propagation so
+	# we always clean up nicely when one of the child procs dies.
+	# we always have to respond on donech (or be killed by the timeout
+	# proc) or we'll leave processes lingering
+	err: string;
+	npid := sys->pctl(Sys->NEWPGRP, nil);
+	if(npid < 0)
+		err = sprint("pctl newpgrp: %r");
+	if(err == nil) {
+		excch <-= (npid, respch := chan of string);
+		err = <-respch;
+	}
+
+	if(err != nil) {
+		killch <-= timeopid;
+		warn(op.id, err);
+		responderrmsg(op, Eservererror, nil);
+		donech <-= 0;
+		return;
+	}
+
+	# to make sure our caller can return (e.g. when writing to remote fails)
+	{
+		_cgiproc(path, op, cgipath, cgiaction, cgitype, length, needcontinue, timeopid, cgich);
+	} exception {
+	* =>	killch <-= timeopid;	# may already have been killed
+	}
+	donech <-= 0;
+}
+
+# note: this function must always kill the timeout proc on "normal" returns (i.e. without raising an exception).
+_cgiproc(path: string, op: ref Op, cgipath, cgiaction: string, cgitype: int, length: big, needcontinue: int, timeopid: int, cgich: chan of int)
+{
+	# pid ends up in timeout(), this proc is killed if it doesn't respond timely
+	pid := sys->pctl(0, nil);
+	cgich <-= pid;
+
+	id := op.id;
+	req := op.req;
+	resp := op.resp;
+
 	if(debugflag) say(id, sprint("handling cgi request, cgipath %q cgiaction %q cgitype %s, pid %d timeopid %d", cgipath, cgiaction, cgitypes[cgitype], pid, timeopid));
 
 	fd0, fd1: ref Sys->FD;
@@ -1217,12 +1226,14 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 		(sfd, serr) := <-replychan;
 		if(serr != nil) {
 			warn(op.id, serr);
-			return responderrmsg(op, Eservererror, nil);
+			killch <-= timeopid;
+			return responderrmsg(op, Eservererror, "Internal Server Error: Handler not reachable");
 		}
 
 		sreq := scgirequest(path, cgipath, req, op, length);
 		if(sys->write(sfd, sreq, len sreq) != len sreq) {
 			warn(id, sprint("write scgi request: %r"));
+			killch <-= timeopid;
 			return responderrmsg(op, Eservererror, nil);
 		}
 		fd0 = fd1 = sfd;
@@ -1232,30 +1243,29 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 		(fd0, fd1, err) = <-replych;
 		if(err != nil) {
 			warn(id, "cgispawn: "+err);
+			killch <-= timeopid;
 			return responderrmsg(op, Eservererror, nil);
 		}
+	}
+
+	sb := bufio->fopen(fd1, Bufio->OREAD);
+	if(sb == nil) {
+		warn(id, sprint("bufio fopen cgi fd: %r"));
+		killch <-= timeopid;
+		return responderrmsg(op, Eservererror, nil);
 	}
 
 	if(length > big 0)
 		spawn cgifunnel(op.id, op.inb, fd0, length);
 
-	sb := bufio->fopen(fd1, Bufio->OREAD);
-	if(sb == nil) {
-		warn(id, sprint("bufio fopen cgi fd: %r"));
-		return responderrmsg(op, Eservererror, nil);
-	}
-
-
 	# we always want a "status: ..." line from the cgi program.  it would be better if we would
 	# generate a "200 ok" if the status is missing, but we cannot parse the full http request
 	# after we've already read the first line (with a header in it) from the iobuf...
 
-	l := sb.gets('\n');
-	killch <-= timeopid;
-
 	rerr: string;
 	hdrs: ref Hdrs;
 	for(;;) {
+		l := sb.gets('\n');
 		if(l == nil) {
 			warn(id, "eof from cgi handler while reading response line");
 			return responderrmsg(op, Eservererror, "Internal Server Error: EOF from handler");
@@ -1276,6 +1286,8 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 			warn(id, sprint("bad cgi response line: %q", l));
 			return responderrmsg(op, Eservererror, "Internal Server Error: Handler sent bad response line");
 		}
+		if(!needcontinue || resp.st != "100")
+			killch <-= timeopid;
 
 		(hdrs, rerr) = Hdrs.read(sb);
 		if(rerr != nil) {
@@ -1283,13 +1295,13 @@ _cgi(path: string, op: ref Op, cgipath, cgiaction: string, cgitype, timeopid: in
 			return responderrmsg(op, Eservererror, "Internal Server Error: Error reading headers from handler");
 		}
 
-		if(needcontinue) {
+		if(resp.st == "100") {
+			needcontinue = 0;
 			fprint(op.fd, "HTTP/1.1 100 Continue\r\n\r\n");
-			if(resp.st == "100") {
-				l = sb.gets('\n');
-				continue;
-			}
+			continue;
 		}
+		if(needcontinue)
+			fprint(op.fd, "HTTP/1.1 100 Continue\r\n\r\n");
 		break;
 	}
 

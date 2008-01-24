@@ -45,7 +45,10 @@ me at mechiel@ueber.net or mechiel@xs4all.nl.
 
 todo:
 - more testing
+- cgifunnel write on closed pipe, broken
+- do we have to send error when GET request includes content-length?
 
+- allow specifying which http methods are allowed on (s)cgi paths?
 - do hostname lookups for config "listen"?  instead of just ips
 - support transfer-encoding chunked and compressed content-encodings from client?
 - check for security issues with http
