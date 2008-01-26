@@ -734,8 +734,10 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(req.version() == HTTP_10 && req.method != GET && req.method != HEAD && req.method != POST)
 		return responderrmsg(op, Enotimplemented, sprint("Unknown Method: \"%s\"", http->methodstr(req.method)));
 
-	if(hasbody(op.req) && (req.method == GET || req.method == HEAD || req.method == TRACE || req.method == DELETE))
+	if(hasbody(op.req) && (req.method == GET || req.method == HEAD || req.method == TRACE || req.method == DELETE)) {
+		op.keepalive = 0;
 		return responderrmsg(op, Ebadrequest, "Bad Request: Entity not allowed in request");
+	}
 	# for other methods, we ignore bodies by closing the connection.  saner than reading and discarding...
 
 	case req.method {
