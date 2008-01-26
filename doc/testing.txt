@@ -2,7 +2,7 @@
 
 emu -c0
 repo=src/httpd
-bind '#U*/home' /usr; bind -b '#s' /chan; ndb/cs; cd; home=`{pwd}; cd $home/$repo/appl/cmd; sblpath=(/dis .)
+bind '#U*/home' /usr; bind -b '#s' /chan; ndb/cs; ndb/dns -r; cd; home=`{pwd}; cd $home/$repo/appl/cmd; sblpath=(/dis .)
 bind -a $home/$repo $home/$repo/testroot/localhost:8000
 bind -a $home/$repo/man $home/$repo/testroot/_default:8000
 ./httpd -n $home/$repo/doc/ndb-testhttpd $home/$repo/testroot

@@ -47,15 +47,9 @@ doc/testing.txt can be used for testing.  it has to be done manually,
 enough corner cases have not been tested, but quite a few have.
 
 todo:
-- more testing
-- do we have to send error when GET request includes content-length?
-
-- for cgi handling, check whether cgi handler has consumed all data?  if it has not, we would still have to close the connection...
 - allow specifying which http methods are allowed on (s)cgi paths?
-- do hostname lookups for config "listen"?  instead of just ips
 - support transfer-encoding chunked and compressed content-encodings from client?
 - check for security issues with http
-- check spec which error responses must be with/without body
 - transparent compression?
 - connection rate limiting?
 - think of ssl?
