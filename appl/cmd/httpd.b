@@ -734,6 +734,10 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(req.version() == HTTP_10 && req.method != GET && req.method != HEAD && req.method != POST)
 		return responderrmsg(op, Enotimplemented, sprint("Unknown Method: \"%s\"", http->methodstr(req.method)));
 
+	if(hasbody(op.req) && (req.method == GET || req.method == HEAD || req.method == TRACE || req.method == DELETE))
+		return responderrmsg(op, Ebadrequest, "Bad Request: Entity not allowed in request");
+	# for other methods, we ignore bodies by closing the connection.  saner than reading and discarding...
+
 	case req.method {
 	GET or HEAD or POST =>
 		;
@@ -745,13 +749,19 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		# only (s)cgi paths allow POST, but we won't say, the path may require auth as well.  what to do then?
 		hdrs.add("allow", "OPTIONS, GET, HEAD, POST, TRACE");
 		hdrs.add("accept-ranges", "bytes");
+		if(hasbody(op.req))
+			op.keepalive = 0;
 		return responderrmsg(op, Eok, nil);
 
 	PUT or DELETE =>
 		# note: when implementing these, complete support for if-match and if-none-match, and much more probably
+		if(hasbody(op.req))
+			op.keepalive = 0;
 		return responderrmsg(op, Enotimplemented, "Not Implemented: PUT and DELETE are not supported");
 
 	* =>
+		if(hasbody(op.req))
+			op.keepalive = 0;
 		return responderrmsg(op, Enotimplemented, sprint("Unknown Method: \"%s\"", http->methodstr(req.method)));
 	}
 
@@ -1667,6 +1677,11 @@ mimetype(cfgs: ref Cfgs, path: string): string
 	if(!haschar(path, '.'))
 		return "text/plain; charset=utf-8";	# for mkfile, README, etc.
 	return "application/octet-stream";
+}
+
+hasbody(req: ref Req): int
+{
+	return req.h.has("content-length", nil) || req.h.has("transfer-encoding", nil);
 }
 
 days := array[] of {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
