@@ -232,6 +232,8 @@ excch: chan of (int, chan of string);
 warnch: chan of (int, string);
 cfgsgetch: chan of chan of ref Cfgs;
 newcfgsch: chan of ref Cfgs;
+logch: chan of (string, string);
+logfdch: chan of ref Sys->FD;
 
 timefd: ref Sys->FD;
 errorfd: ref Sys->FD;
@@ -366,6 +368,10 @@ init(nil: ref Draw->Context, args: list of string)
 	newcfgsch = chan of ref Cfgs;
 	spawn cfgsserver();
 
+	logch = chan of (string, string);
+	logfdch = chan of ref Sys->FD;
+	spawn logger();
+
 	newcfgsch <-= cfgs;
 
 	cgispawnch = chan of (string, string, string, ref Op, big, chan of (ref Sys->FD, ref Sys->FD, string));
@@ -436,6 +442,7 @@ cfgsserver()
 	cfgs = <-newcfgsch =>
 		# non-atomic wrt other threads...  not much to do about it
 		debugflag = cfgs.debugflag;
+		logfdch <-= cfgs.accessfd;
 	}
 }
 
@@ -1511,8 +1518,105 @@ statusmsg(code: int): string
 	raise sprint("missing status message for code %d", code);
 }
 
+dnslookup(dnsch: chan of string, respch: chan of (string, string))
+{
+	path := "/net/dns";
+	for(;;) {
+		ip := <-dnsch;
+
+		revip, err: string;
+		l: list of string;
+		fd := sys->open(path, Sys->ORDWR);
+		if(fd == nil) {
+			err = sprint("open %q: %r", path);
+		} else {
+			(l, err) = reversedns(fd, ip);
+			if(len l > 1)
+				err = "too many results";
+			else if(len l == 0 && err == nil)
+				err = "no results";
+			else if(len l == 1)
+				revip = hd l;
+			
+		}
+		respch <-= (revip, err);
+	}
+}
+
+reversedns(fd: ref Sys->FD, ip: string): (list of string, string)
+{
+	(nil, l) := sys->tokenize(ip, ".");
+	if(len l != 4)
+		return (nil, "invalid ip address");
+	dst := "";
+	for(; l != nil; l = tl l)
+		dst = hd l+"."+dst;
+	dst += "in-addr.arpa";
+	if(fprint(fd, "%s ptr", dst) < 0)
+		return (nil, sprint("%r"));
+	r: list of string;
+	for(;;) {
+		have := sys->read(fd, d := array[1024] of byte, len d);
+		if(have < 0)
+			return (nil, sprint("read: %r"));
+		if(have == 0)
+			break;
+		(nil, l) = sys->tokenize(string d[:have], " \t");
+		if(len l != 3 || hd tl l != "ptr" || hd l != dst)
+			continue;
+		r = (hd tl tl l)::r;
+	}
+	return (r, nil);
+}
+
+logger()
+{
+	accessfd: ref Sys->FD;
+	backlog := array[0] of (string, string);
+
+	ip, msg: string;
+	respch := chan of (string, string);
+	dnsch := chan of string;
+
+	spawn dnslookup(dnsch, respch);
+
+	for(;;) alt {
+	(logip, s) := <-logch =>
+		if(accessfd == nil)
+			continue;
+		if(msg != nil) {
+			na := array[len backlog+1] of (string, string);
+			na[:] = backlog;
+			na[len backlog] = (logip, s);
+			backlog = na;
+		} else {
+			msg = s;
+			ip = logip;
+			dnsch <-= logip;
+		}
+
+	(revip, err) := <-respch =>
+		if(err != nil)
+			say(0, sprint("reverse dns lookup %q: %s", ip, err));
+		if(fprint(accessfd, "%s %q\n", msg, revip) < 0)
+			warn(0, sprint("writing access log message: %r"));
+		msg = nil;
+		if(len backlog != 0) {
+			(ip, msg) = backlog[0];
+			backlog = backlog[1:];
+			dnsch <-= ip;
+		}
+
+	accessfd = <-logfdch =>
+		;
+	}
+}
+
 accesslog(op: ref Op)
 {
+	if(op.cfgs.accessfd == nil && !debugflag)
+		return;
+
 	length := "";
 	if(!op.chunked && op.length >= big 0)
 		length = string op.length;
@@ -1524,8 +1628,7 @@ accesslog(op: ref Op)
 		op.req.major, op.req.minor, op.resp.st, op.resp.stmsg,
 		length,
 		op.req.h.get("user-agent"), op.req.h.get("referer"));
-	if(op.cfgs.accessfd != nil)
-		fprint(op.cfgs.accessfd, "%s\n", s);
+	logch <-= (op.rhost, s);
 	if(debugflag) say(op.id, "accesslog: "+s);
 }
 
