@@ -1597,7 +1597,7 @@ logger()
 
 	(revip, err) := <-respch =>
 		if(err != nil)
-			say(0, sprint("reverse dns lookup %q: %s", ip, err));
+			warn(0, sprint("reverse dns lookup %q: %s", ip, err));
 		if(fprint(accessfd, "%s %q\n", msg, revip) < 0)
 			warn(0, sprint("writing access log message: %r"));
 		msg = nil;
