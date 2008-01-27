@@ -70,14 +70,10 @@ mindful of security
 
 .PP
 .I Httpd
-normally serves files from
+serves files from
 .IR webroot .
-Each response is logged to
-.IR /services/logs/httpdaccess .
-The options, described below, can configure all
-.I httpd
-features except virtual hosting.
-For virtual hosting, the configuration file must be used and the command-line options will only apply to the "default" hostname (i.e. all besides those explicitly configured).  The configuration file, specified using
+Options, described below, configure all features except virtual hosting.
+For virtual hosting, a configuration file must be used and the command-line options will only apply to the "default" hostname (i.e. all besides those explicitly configured).  The configuration file, specified using
 .BI -n " config"
 is in
 .I attrdb(6)
@@ -118,26 +114,27 @@ The options and their configuration file equivalents:
 .PP
 .TP
 .B -d
-Enable debugging.  Debug messages are written to standard error and the error log,
+Print debug messages to standard error and the error log,
 .IR /services/logs/httpderror .
 Attributes `debug' and `nodebug' enable and disable debugging.  Due to attrdb, `nodebug' always takes precedence regardless of position in file.
 .TP
 .B -h
-Serve multiple domains, known as `virtual hosting'.  The `host'-header in the request (for http/1.1-only) indicates the targeted host.  If enabled, requests for
+Serve multiple domains, known as virtual hosting.  The `host'-header in the request (for http/1.1-only) selects the targeted host.  If enabled, requests for
 .I host
 to TCP
 .I port
 are served from directory
 .IR webroot/host:port .
-If no host has been specified, e.g. for http/1.0, `_default' is used as host in the path.
+If no host has been specified, e.g. for http/1.0, `_default' is used as host.
 Note that the port is not taken from the `host'-header, but always from the local port of the connection.
 Files in
 .I webroot
 are never served directly with
 .B -h
 present.
-Attributes `vhost' and `novhost' enable and disable vritual hosting.  Due to attrdb, `novhost' always takes precedence regardless of position in file.
-The virtual hosts can only be specified in the configuration file.  A
+Attributes `vhost' and `novhost' enable and disable virtual hosting.  Due to attrdb, `novhost' always takes precedence regardless of position in file.
+.br
+Virtual hosts can only be specified with the configuration file.  A
 `host'
 entry starts a configuration for a domain, attribute
 `port'
@@ -155,15 +152,15 @@ attributes
 and
 `useport'
 specify which entry to use for requests instead.
-The ports may be omitted and will default to 80.
+`Port' may be omitted, defaulting to `80'.  `Usehost' defaults to the value of `port'.
 .TP
 .B -L
 For directories, return a listing of files in html.
-Contents are only listed when no index file has been found, as specified with
+Listings are only returned when no index file has been found, as specified with
 .BR -i .
 The per-host configuration attribute is
 `listings'
-and does not need a value.
+(value ignored).
 .TP
 .BI -A " path realm user:pass"
 Require authorization for
@@ -184,12 +181,12 @@ the user name and
 `pass'
 the password.
 Paths
-may occur multiple times, each valid user/pass combination is allowed access.
+may occur multiple times in different `auth'-lines, each valid user/pass combination is allowed access.
 .TP
 .BI -C " cachesecs"
 Add header to allow clients to keep the response in their cache for
 .I cachesecs
-seconds.  This only applies to static content (i.e. file serving and directory listings) not cgi and scgi handlers.
+seconds.  This only applies to static content (i.e. files and directory listings) not cgi and scgi handlers.
 The per-host configuration attribute is
 .IR cachesecs .
 .TP
@@ -232,7 +229,7 @@ Create a
 .IR sys-file2chan (2)
 control file in
 .I /chan
-by the name of
+named
 .IR ctlchan .
 Currently, only the command `reload' is accepted.  It reloads the configuration file currently in use.
 This is a global configuration file option, the corresponding attribute is
@@ -240,9 +237,7 @@ This is a global configuration file option, the corresponding attribute is
 Only a single control file can be registered.
 .TP
 .BI -i " indexfile"
-Make
-.I httpd
-search for the file named
+Search for the file named
 .I indexfile
 when a directory is requested and return that instead.  This is commonly used to serve an
 `index.html'.
@@ -258,8 +253,9 @@ can be specified, each being handled as
 .BI -l " logfile"
 Write the access log to
 .IR logfile .
-For each request, the response the following is printed (as a list of quoted works, quoted as in
-.IR sh (1)):  connection id, timestamp, remote and local host and port, method, requested host (from `host'-header), path, http version, response code, message and length, the user-agent that sent the request and the referer.
+For each response, the following is printed (as a list of quoted words, quoted as in
+.IR sh (1)):
+Connection id, timestamp, remote and local ip and port, method, requested host (from `host'-header), path (with query), http version, response code, message and length, the user-agent that sent the request, the referer and finally the domain name for the ip address.
 The global configuration attribute is
 `accesslog'.  The file is also reopened on a reload of the configuration file.
 .TP
@@ -276,16 +272,15 @@ overrides the current configuration, command-line options specified before
 .B -n
 are effectively ignored.  Options specified after
 .B -n
-are used for the `default' host.
-There is no equivalent for the configuration file.  Be sure to use full path names on the command-line if you want reloads to work, see option
-.BR -f .
+are used for the `default' host.  Note that a reload also replaces all command-line options.
+There is no equivalent for the configuration file.  Be sure to use full path names on the command-line if you want reloads to work.
 .TP
 .BI -r " pathre dest"
-Redirect requests to regular expression
+Redirect requests that match regular expression
 .I pathre
 to
 .I dest
-with an HTTP `301 Moved Permanently' response.
+with an HTTP ``301 Moved Permanently'' response.
 .I Pathre
 can contain groups, specified with ()'s as per
 .IR regex (6)
@@ -301,7 +296,7 @@ The per-host configuration attribute is
 `redir' (value ignored).
 `Src'
 is the equivalent of
-IR pathre ,
+.IR pathre ,
 `dst'
 the equivalent of
 .IR dest .
@@ -324,7 +319,7 @@ the address.
 .BI -t " extension mimetype"
 Registers extension (which is suffix-matched and thus should usually include a dot) as being of
 .IR mimetype .
-For each request that returns a static file, the mimetype to be returned is looked up in the types specified by
+For each response returning a static file, the mimetype to be returned is looked up in the types specified by
 .B -t
 and compiled-in types, in that order.
 The global configuration attribute is
@@ -342,7 +337,7 @@ On the same line,
 should be present and
 `port'
 may be present (it defaults to the port of the host definition).
-If virtual hosts are enabled, the local address is checked for each request.  If at least one ip address has been specified and the local address is not present in the addresses list of the per-host configuration for the request, a `404 Object Not Found' is returned.
+If virtual hosts are enabled, the local address is checked for each request.  If at least one ip address has been specified and the local address is not present in the addresses list of the per-host configuration for the request, a ``404 Object Not Found'' error is returned.
 
 .PP
 To prevent files to be served to the public inadvertently, the root directory of the
