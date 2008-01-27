@@ -1182,6 +1182,7 @@ Host: localhost:8000
 Connection: close
 content-length: 0
 
+# xxx returns 404, returning 403 at all the right times is hard when doing directory listings
 # test for permission denied
 # * 403
 $cmd
