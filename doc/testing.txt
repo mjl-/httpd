@@ -637,8 +637,8 @@ GET /README HTTP/1.1
 Host: ::1
 Connection: close
 
-# xxx, but does
 # bogus, should not succeed
+# * 404
 $cmd
 GET /README HTTP/1.1
 Host: [localhost]:8000

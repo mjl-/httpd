@@ -1671,6 +1671,10 @@ splithost(s: string): (string, string)
 		port = port[1:];
 		if(port != nil && port[0] == ':')
 			port = port[1:];
+		(ok, ipaddr) := IPaddr.parse(host);
+		if(ok != 0 || ipaddr.isv4())
+			return (nil, port);
+		host = ipaddr.text();
 	}
 	return (host, port);
 }
