@@ -176,6 +176,7 @@ Emovedpermanently:	con 301;
 Enotmodified:		con 304;
 Ebadrequest:		con 400;
 Eunauthorized:		con 401;
+Eforbidden:		con 403;
 Enotfound:		con 404;
 Emethodnotallowed:	con 405;
 Elengthrequired:	con 411;
@@ -856,8 +857,13 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 
 	# path is one of:  plain file, directory (either listing or plain index file)
 	dfd := sys->open("."+path, Sys->OREAD);
-	if(dfd != nil)
-		(dok, dir) := sys->fstat(dfd);
+	if(dfd == nil) {
+		st := Enotfound;
+		if(substr("permission denied", sprint("%r")))
+			st = Eforbidden;
+		return responderrmsg(op, st, nil);
+	}
+	(dok, dir) := sys->fstat(dfd);
 	if(dok == 0 && dir.mode&Sys->DMDIR && path[len path-1] == '/') {
 		for(l := cfg.indexfiles; l != nil; l = tl l) {
 			ipath := "."+path+hd l;
@@ -865,8 +871,12 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 			if(iok != 0 || idir.mode&Sys->DMDIR)
 				continue;
 			ifd := sys->open(ipath, Sys->OREAD);
-			if(ifd == nil)
-				return responderrmsg(op, Enotfound, nil);
+			if(ifd == nil) {
+				st := Enotfound;
+				if(substr("permission denied", sprint("%r")))
+					st = Eforbidden;
+				return responderrmsg(op, st, nil);
+			}
 			if(debugflag) say(id, sprint("using index file %q", hd l));
 			dfd = ifd;
 			dir = idir;
@@ -874,7 +884,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 			break;
 		}
 	}
-	if(dfd == nil || dok != 0 || (dir.mode&Sys->DMDIR) && (!cfg.listings || path != nil && path[len path-1] != '/'))
+	if(dok != 0 || (dir.mode&Sys->DMDIR) && (!cfg.listings || path != nil && path[len path-1] != '/'))
 		return responderrmsg(op, Enotfound, nil);
 
 	if(req.method == POST) {
@@ -1948,6 +1958,11 @@ hasmethod(l: list of string, v: string): int
 		if(hd l == v)
 			return 1;
 	return 0;
+}
+
+substr(sub, s: string): int
+{
+	return str->prefix(sub, str->splitstrl(s, sub).t1);
 }
 
 rev[T](l: list of T): list of T
