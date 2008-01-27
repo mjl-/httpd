@@ -16,7 +16,7 @@ httpd \- HTTP server
 .I addr
 ] [
 .B -c
-.I path command
+.I path command methods
 ] [
 .B -f
 .I ctlchan
@@ -34,7 +34,7 @@ httpd \- HTTP server
 .I pathre dest
 ] [
 .B -s
-.I path addr
+.I path addr methods
 ] [
 .B -t
 .I extension mimetype
@@ -102,7 +102,7 @@ host=www.example.com port=80
         redir   src='^/oldfile$'        dst=/newfile
         redir   src='^/oldpath/(.*)$'   dst=/newpath/$1
         scgi    path=/scgi/test         addr=net!localhost!4000
-        cgi     path=/cgi/env           cmd='{load std; echo Status: 200 OK; echo content-type: text/plain; echo; cd /env && for(i in *) { echo $i''=''`{cat $i}}}'
+        cgi     path=/cgi/env           methods=GET,HEAD cmd='{load std; echo Status: 200 OK; echo content-type: text/plain; echo; cd /env && for(i in *) { echo $i''=''`{cat $i}}}'
         auth    path=/secret   realm='secret place'    user=username pass=password
 
 alias   
@@ -204,7 +204,7 @@ If no addresses are specified,
 will listen on
 .IR net!*!http .
 .TP
-.BI -c " path command"
+.BI -c " path command methods"
 Handle requests for
 .I path
 by executing
@@ -216,13 +216,16 @@ is prefix-matched and does not have to end with a slash.
 .I Command
 is executed using
 .IR sh (2).
+.I Methods
+is a comma- or space-separated list of methods (case-sensitive) that are allowed on the resource.  An empty list allows all methods.
 The per-host configuration attribute is
 `cgi'
 (value ignored).
 `Path'
 specifies the host,
 `cmd'
-the command.
+the command and
+`methos' the methods.
 .TP
 .BI -f " ctlchan"
 Create a
@@ -301,20 +304,23 @@ is the equivalent of
 the equivalent of
 .IR dest .
 .TP
-.BI -s " path addr"
+.BI -s " path addr methods"
 Handle requests for
 .I path
 by passing the requests to the SCGI handler at
 .IR addr .
 .I Path
 is prefix-matched and need not end with a slash.
+.I Methods
+is a comma- or space-separated list of methods (case-sensitive) that are allowed on the resource.  An empty list allows all methods.
 The per-host configuration attribute is
 `scgi'
 (value unused).
 `Path'
 specifies the path,
 `addr'
-the address.
+the address and
+`methods' the methods.
 .TP
 .BI -t " extension mimetype"
 Registers extension (which is suffix-matched and thus should usually include a dot) as being of

@@ -35,7 +35,7 @@ http: Http;
 
 print, sprint, fprint, fildes: import sys;
 Url, Req, Resp, Hdrs, HTTP_10, HTTP_11, encodepath: import http;
-OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, CONNECT: import http;
+UNKNOWN, OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, CONNECT: import http;
 IPaddr: import ipm;
 Db, Dbentry, Tuples: import attrdb;
 
@@ -56,7 +56,7 @@ Cfg: adt {
 	host, port:	string;
 	listings, cachesecs:	int;
 	listens:	list of ref (string, string);	# ip, port
-	cgipaths:	list of ref (string, string, int);	# path, cmd|addr, Cgi|Scgi
+	cgipaths:	list of ref (string, string, list of string, int);	# path, cmd|addr, methods, Cgi|Scgi
 	indexfiles:	list of string;
 	redirs:	list of ref Repl;
 	auths:	list of ref (string, string, string);	# path, realm, base64 user:pass
@@ -275,7 +275,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	arg := load Arg Arg->PATH;
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-dhL] [-A path realm user:pass] [-C cachesecs] [-a addr] [-c path command] [-f ctlchan] [-i indexfile] [-l logfile] [-n config] [-r pathre dest] [-s path addr] [-t extension mimetype] webroot");
+	arg->setusage(arg->progname()+" [-dhL] [-A path realm user:pass] [-C cachesecs] [-a addr] [-c path command methods] [-f ctlchan] [-i indexfile] [-l logfile] [-n config] [-r pathre dest] [-s path addr methods] [-t extension mimetype] webroot");
 	while((c := arg->opt()) != 0)
 		case c {
 		'A' =>	defcfg.auths = ref (arg->earg(), arg->earg(), base64->enc(array of byte arg->earg()))::defcfg.auths;
@@ -286,7 +286,7 @@ init(nil: ref Draw->Context, args: list of string)
 		'C' =>	defcfg.cachesecs = int arg->earg();
 		'L' =>	defcfg.listings++;
 		'a' =>	cfgs.addrs = arg->earg()::cfgs.addrs;
-		'c' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), Cgi)::defcfg.cgipaths;
+		'c' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), sys->tokenize(arg->earg(), " ,").t1, Cgi)::defcfg.cgipaths;
 		'd' =>	cfgs.debugflag++;
 		'f' =>	ctlchan = arg->earg();
 		'h' =>	cfgs.vhostflag++;
@@ -316,7 +316,7 @@ init(nil: ref Draw->Context, args: list of string)
 				raise "fail:usage";
 			}
 			defcfg.redirs = repl::defcfg.redirs;
-		's' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), Scgi)::defcfg.cgipaths;
+		's' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), sys->tokenize(arg->earg(), " ,").t1, Scgi)::defcfg.cgipaths;
 		't' =>	cfgs.usertypes = ref (arg->earg(), arg->earg())::cfgs.usertypes;
 		* =>	arg->usage();
 		}
@@ -500,7 +500,6 @@ cgispawn(cmd, path, cgipath: string, op: ref Op, length: big, replych: chan of (
 
 	spawn errlogger(op, p2[0]);
 
-	# only keep our end of the pipe
 	if(sys->pctl(Sys->NEWPGRP|Sys->NEWFD|Sys->FORKNS|Sys->FORKENV, p0[0].fd::p1[0].fd::p0[1].fd::p1[1].fd::p2[1].fd::nil) < 0) {
 		replych <-= (nil, nil, sprint("pctl newpgrp,newfd,forkns,forkenv: %r"));
 		return;
@@ -663,11 +662,14 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	op.cfgs = <-cfgsrespch;
 
 	hdrs.add("date", httpdate(op.now));
-	if(rerr != nil || req.major != 1) {
+	if(rerr != nil || req.major != 1 || req.method == UNKNOWN) {
 		st := Ebadrequest;
-		if(rerr == nil) {
+		if(rerr == nil && req.major != 1) {
 			st = Ebadversion;
 			rerr = sprint("Version requested is HTTP/%d.%d", req.major, req.minor);
+		} else if(rerr == nil && req.method == UNKNOWN) {
+			st = Enotimplemented;
+			rerr = sprint("Method %q not supported", req.methodstr);
 		}
 
 		stmsg := statusmsg(st);
@@ -687,7 +689,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	}
 	killch <-= killpid;
 	if(debugflag) say(id, sprint("request: method %q url %q version %q",
-		http->methodstr(req.method), req.url.pack(), sprint("HTTP/%d.%d", req.major, req.minor)));
+		req.methodstr, req.url.pack(), sprint("HTTP/%d.%d", req.major, req.minor)));
 	op.req = req;
 
 	# all values besides "close" are supposedly header names, not important
@@ -732,7 +734,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	}
 
 	if(req.version() == HTTP_10 && req.method != GET && req.method != HEAD && req.method != POST)
-		return responderrmsg(op, Enotimplemented, sprint("Unknown Method: \"%s\"", http->methodstr(req.method)));
+		return responderrmsg(op, Enotimplemented, sprint("Unknown Method: \"%s\"", req.methodstr));
 
 	if(hasbody(op.req) && (req.method == GET || req.method == HEAD || req.method == TRACE || req.method == DELETE)) {
 		op.keepalive = 0;
@@ -764,7 +766,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	* =>
 		if(hasbody(op.req))
 			op.keepalive = 0;
-		return responderrmsg(op, Enotimplemented, sprint("Unknown Method: \"%s\"", http->methodstr(req.method)));
+		return responderrmsg(op, Enotimplemented, sprint("Unknown Method: \"%s\"", req.methodstr));
 	}
 
 	# remove occurrences of "/elem/../" from path, returned path always starts with "/"
@@ -846,9 +848,11 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		return respond(op, Emovedpermanently, html, "text/html; charset=utf-8");
 	}
 
-	# if path is cgi-handled
-	if(((cgipath, cgiaction, cgitype) := findcgi(cfg, path)).t1 != nil)
+	if(((cgipath, cgiaction, methods, cgitype) := findcgi(cfg, path)).t1 != nil) {
+		if(methods != nil && !hasmethod(methods, req.methodstr))
+			return responderrmsg(op, Emethodnotallowed, nil);
 		return cgi(path, op, cgipath, cgiaction, cgitype);
+	}
 
 	# path is one of:  plain file, directory (either listing or plain index file)
 	dfd := sys->open("."+path, Sys->OREAD);
@@ -932,12 +936,12 @@ pathsanitize(path: string): string
 	return s;
 }
 
-findcgi(cfg: ref Cfg, path: string): (string, string, int)
+findcgi(cfg: ref Cfg, path: string): (string, string, list of string, int)
 {
 	for(l := cfg.cgipaths; l != nil; l = tl l)
 		if(str->prefix((*hd l).t0, path))
 			return *hd l;
-	return (nil, nil, 0);
+	return (nil, nil, nil, 0);
 }
 
 etag(path: string, op: ref Op, dir: Sys->Dir): string
@@ -1406,7 +1410,7 @@ cgivars(path, cgipath: string, op: ref Op, length: big, environ: list of (string
 		("GATEWAY_INTERFACE",	"CGI/1.1")::
 		("SERVER_PROTOCOL",	http->versionstr(op.req.version()))::
 		("SERVER_NAME",		servername)::
-		("REQUEST_METHOD",	http->methodstr(op.req.method))::
+		("REQUEST_METHOD",	op.req.methodstr)::
 		("REQUEST_URI",		op.req.url.packpath())::
 		("SCRIPT_NAME",		cgipath)::
 		("PATH_INFO",		pathinfo)::
@@ -1636,7 +1640,7 @@ accesslog(op: ref Op)
 	s := sprint("%d %d %s!%s %s!%s %q %q %q HTTP/%d.%d %q %q %q %q %q",
 		op.id, op.now,
 		op.rhost, op.rport, op.lhost, op.lport,
-		http->methodstr(op.req.method), op.req.h.get("host"), op.req.url.path+op.req.url.query,
+		op.req.methodstr, op.req.h.get("host"), op.req.url.path+op.req.url.query,
 		op.req.major, op.req.minor, op.resp.st, op.resp.stmsg,
 		length,
 		op.req.h.get("user-agent"), op.req.h.get("referer"));
@@ -1938,6 +1942,14 @@ haschar(s: string, c: int): int
 	return 0;
 }
 
+hasmethod(l: list of string, v: string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == v)
+			return 1;
+	return 0;
+}
+
 rev[T](l: list of T): list of T
 {
 	r: list of T;
@@ -2189,13 +2201,23 @@ Cfg.read(e: ref Dbentry, defaultport: string): (ref Cfg, string)
 				cmd := tups.find("cmd");
 				if(path == nil || cmd == nil)
 					return (nil, "missing path or cmd in cgi line");
-				cfg.cgipaths = ref ((hd path).val, (hd cmd).val, Cgi)::cfg.cgipaths;
+
+				methods: list of string;
+				methodtups := tups.find("methods");
+				if(methodtups != nil)
+					methods = sys->tokenize((hd methodtups).val, " ,").t1;
+				cfg.cgipaths = ref ((hd path).val, (hd cmd).val, methods, Cgi)::cfg.cgipaths;
 			"scgi" =>
 				path := tups.find("path");
 				addr := tups.find("addr");
 				if(path == nil || addr == nil)
 					return (nil, "missing path or addr in scgi line");
-				cfg.cgipaths = ref ((hd path).val, (hd addr).val, Scgi)::cfg.cgipaths;
+
+				methods: list of string;
+				methodtups := tups.find("methods");
+				if(methodtups != nil)
+					methods = sys->tokenize((hd methodtups).val, " ,").t1;
+				cfg.cgipaths = ref ((hd path).val, (hd addr).val, methods, Scgi)::cfg.cgipaths;
 			}
 		}
 	}

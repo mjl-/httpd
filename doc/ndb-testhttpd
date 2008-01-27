@@ -42,6 +42,7 @@ host=localhost port=8000
 	cgi	path=/cgi5	cmd='{echo Status: 200 OK; echo content-length: 1; echo content-type: text/plain; echo; echo -n a}'
 	cgi	path=/cgi6	cmd='{echo Status: 200 OK; echo content-length: 1; echo content-type: text/plain; echo; echo -n aa}'
 	cgi	path=/cgi7	cmd='{echo Status: 200 OK; echo content-length: 1; echo content-type: text/plain; echo}'
+	cgi	path=/cgi8	cmd='{load std; echo Status: 200 OK; echo content-type: text/plain; echo; cd /env && for(i in *) { echo -n $i^''=''; cat $i; echo}}'	methods=GET,HEAD
 	scgi	path=/scgi0	addr='net!localhost!4006'
 	scgi	path=/scgi1	addr='net!localhost!3999'
 	auth	path=/auth0	realm=test user=testuser pass=testpass

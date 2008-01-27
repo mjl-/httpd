@@ -675,7 +675,7 @@ Connection: close
 
 
 # start httpd with config and with conflicting options, before and after loading config
-# ./httpd -h -d -a 'net!*!8001' -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 -c /cgi '{echo blah}' -t .txt test/flierp -n /dev/null -a 'net!*!8000' $home/$repo/testroot
+# ./httpd -h -d -a 'net!*!8001' -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 '' -c /cgi '{echo blah}' '' -t .txt test/flierp -n /dev/null -a 'net!*!8000' $home/$repo/testroot
 
 # now, all those options should be off except -f, and we should be listening on port 8000 now.
 
@@ -704,7 +704,7 @@ Connection: close
 
 
 # this time, these options should still be used
-# ./httpd  -n /dev/null -d -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 -c /cgi '{echo blah}' -t .txt test/flierp -a 'net!*!8000' $home/$repo/testroot
+# ./httpd  -n /dev/null -d -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 '' -c /cgi '{echo blah}' '' -t .txt test/flierp -a 'net!*!8000' $home/$repo/testroot
 
 # returns listing of testroot
 $cmd
@@ -848,14 +848,12 @@ GET  HTTP/1.1
 Host: localhost:8000
 Connection: close
 
-# xxx returns 400 bad request
 # unknown method
 # * 501 not implemented
 $cmd
 TEST / HTTP/1.1
 
-# xxx 400 bad request
-# lower case, invalid (right? xxx)
+# lower case, invalid
 # * 501 not implemented
 $cmd
 get / HTTP/1.1
@@ -1000,7 +998,7 @@ transfer-encoding: chunked
 content-length: 0
 connection: close
 
-# transfer-encoding  is valid, but obscure, so we don't allow it (xxx?)
+# transfer-encoding  is valid, but obscure, so we don't allow it (fix?)
 # * 501 not implemented
 $cmd
 POST /cgi0?q=test HTTP/1.1
@@ -1017,7 +1015,7 @@ content-encoding: identity
 content-length: 0
 connection: close
 
-# this content-encoding is valid, but obscure, so we don't allow it (xxx?)
+# this content-encoding is valid, but obscure, so we don't allow it (fix?)
 # * 501 not implemented
 $cmd
 POST /cgi0?q=test HTTP/1.1
@@ -1164,3 +1162,18 @@ Host: localhost:8000
 content-length: 2
 
 a
+
+# test method that is explicitly allowed
+$cmd
+GET /cgi8 HTTP/1.1
+Host: localhost:8000
+Connection: close
+
+# test method that is not allowed
+# * 405
+$cmd
+POST /cgi8 HTTP/1.1
+Host: localhost:8000
+Connection: close
+content-length: 0
+
