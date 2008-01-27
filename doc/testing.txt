@@ -536,7 +536,13 @@ Range: bytes = 0-2
 Connection: close
 if-range: Mon, 18 Jan 2020 10:01:52 GMT
 
-# xxx test multiple etags, with "-quoting for http/1.1 vs http/1.0
+# test parsing of escaped double-quote.  should recognize the latter valid tag
+# * 304
+$cmd
+GET /README HTTP/1.1
+Host: localhost:8000
+Connection: close
+if-none-match: "double-quote \"escape\"", "67445287edaed679f8b2ce102e827815ad17d46f"
 
 
 # config, alias
@@ -841,8 +847,8 @@ GET
 $cmd
 GET HTTP/1.1
 
-# xxx is empty path valid?
-# empty path
+# empty path, invalid
+# * 400
 $cmd
 GET  HTTP/1.1
 Host: localhost:8000
@@ -1024,7 +1030,6 @@ content-encoding: identity, identity
 content-length: 0
 connection: close
 
-# xxx is this the right error?
 # no compressed incoming data
 # * 501 not implemented
 $cmd
