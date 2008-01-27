@@ -2146,7 +2146,7 @@ Cfgs.find(c: self ref Cfgs, host, port: string): ref Cfg
 		if(host == chost && port == cport)
 			return config;
 	}
-	return nil;
+	return c.default;
 }
 
 
