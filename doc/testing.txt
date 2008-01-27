@@ -3,9 +3,9 @@
 emu -c0
 repo=src/httpd
 bind '#U*/home' /usr; bind -b '#s' /chan; ndb/cs; ndb/dns -r; cd; home=`{pwd}; cd $home/$repo/appl/cmd; sblpath=(/dis .)
-bind -a $home/$repo $home/$repo/testroot/localhost:8000
-bind -a $home/$repo/man $home/$repo/testroot/_default:8000
-./httpd -n $home/$repo/doc/ndb-testhttpd $home/$repo/testroot
+bind -a $home/$repo $home/$repo/doc/testroot/localhost:8000
+bind -a $home/$repo/man $home/$repo/doc/testroot/_default:8000
+./httpd -n $home/$repo/doc/ndb-testhttpd $home/$repo/doc/testroot
 
 
 emu -c0
@@ -645,7 +645,7 @@ Host: [localhost]:8000
 Connection: close
 
 # default config
-# ./httpd -n /dev/null -d -a 'net!*!8000' $home/$repo/testroot
+# ./httpd -n /dev/null -d -a 'net!*!8000' $home/$repo/doc/testroot
 
 # should return normal response
 $cmd
@@ -665,7 +665,7 @@ echo reload >/chan/httpd
 # command-line options: overrides config/ignored
 
 # start simple httpd:
-# ./httpd $home/$repo/testroot
+# ./httpd $home/$repo/doc/testroot
 
 # request succeeds!
 $cmd
@@ -675,7 +675,7 @@ Connection: close
 
 
 # start httpd with config and with conflicting options, before and after loading config
-# ./httpd -h -d -a 'net!*!8001' -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 '' -c /cgi '{echo blah}' '' -t .txt test/flierp -n /dev/null -a 'net!*!8000' $home/$repo/testroot
+# ./httpd -h -d -a 'net!*!8001' -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 '' -c /cgi '{echo blah}' '' -t .txt test/flierp -n /dev/null -a 'net!*!8000' $home/$repo/doc/testroot
 
 # now, all those options should be off except -f, and we should be listening on port 8000 now.
 
@@ -704,7 +704,7 @@ Connection: close
 
 
 # this time, these options should still be used
-# ./httpd  -n /dev/null -d -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 '' -c /cgi '{echo blah}' '' -t .txt test/flierp -a 'net!*!8000' $home/$repo/testroot
+# ./httpd  -n /dev/null -d -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 '' -c /cgi '{echo blah}' '' -t .txt test/flierp -a 'net!*!8000' $home/$repo/doc/testroot
 
 # returns listing of testroot
 $cmd
