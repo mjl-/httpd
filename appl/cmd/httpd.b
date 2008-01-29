@@ -1290,6 +1290,7 @@ _cgiproc(path: string, op: ref Op, cgipath, cgiaction: string, cgitype: int, len
 	hdrs: ref Hdrs;
 	for(;;) {
 		l := sb.gets('\n');
+		killch <-= timeopid;
 		if(l == nil) {
 			warn(id, "eof from cgi handler while reading response line");
 			return responderrmsg(op, Eservererror, "Internal Server Error: EOF from handler");
@@ -1310,8 +1311,6 @@ _cgiproc(path: string, op: ref Op, cgipath, cgiaction: string, cgitype: int, len
 			warn(id, sprint("bad cgi response line: %q", l));
 			return responderrmsg(op, Eservererror, "Internal Server Error: Handler sent bad response line");
 		}
-		if(!needcontinue || resp.st != "100")
-			killch <-= timeopid;
 
 		(hdrs, rerr) = Hdrs.read(sb);
 		if(rerr != nil) {
