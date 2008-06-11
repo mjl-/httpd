@@ -744,8 +744,11 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	# for other methods, we ignore bodies by closing the connection.  saner than reading and discarding...
 
 	case req.method {
-	GET or HEAD or POST =>
+	GET or HEAD =>
 		;
+	POST =>
+		if(hasbody(op.req))
+			op.keepalive = 0;
 	TRACE =>
 		# bug: the response does not have * as path, but /
 		return respond(op, Eok, req.pack(), "message/http");
@@ -1343,7 +1346,6 @@ _cgiproc(path: string, op: ref Op, cgipath, cgiaction: string, cgitype: int, len
 	accesslog(op);
 
 	op.chunked = elength == big -1 && resp.version() >= HTTP_11;
-	op.keepalive = op.keepalive && (req.method != POST || !req.h.has("content-length", nil));
 	rerr = hresp(resp, op.fd, op.keepalive, op.chunked);
 	if(rerr != nil) {
 		warn(id, "writing response: "+rerr);
