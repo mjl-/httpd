@@ -41,6 +41,11 @@ in the public domain.  for bugs, questions, comments, etc., contact
 me at mechiel@ueber.net or mechiel@xs4all.nl.
 
 
+# non-features
+
+some features will not be implemented.  for example:
+- connection rate limiting.  should be done at a higher level, e.g. firewall.
+
 # testing/todo
 
 doc/testing.txt can be used for testing.  it has to be done manually,
@@ -50,7 +55,6 @@ todo:
 - support transfer-encoding chunked and compressed content-encodings from client?
 - check for security issues with http
 - transparent compression?
-- connection rate limiting?
 - think of ssl?
 - try to fix dir listings for paths with multiple slashes in them.  firefox breaks on them, is firefox right?
 - test with other browsers
