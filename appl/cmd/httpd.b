@@ -977,7 +977,10 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 
 	if(debugflag) say(id, "doing plain file");
 	ct := mimetype(op.cfgs, path);
-	resp.h.add("content-type", ct);
+	if(ct != nil)
+		resp.h.add("content-type", ct);
+	else
+		warn(op.id, sprint("could not determine content-type:  host %q path %q query %q", op.req.h.get("host"), op.req.url.path, op.req.url.query));
 	op.length = dir.length;
 	resp.h.add("content-length", string op.length);
 
@@ -1688,7 +1691,7 @@ mimetype(cfgs: ref Cfgs, path: string): string
 			return mimetypes[i].t1;
 	if(!haschar(path, '.'))
 		return "text/plain; charset=utf-8";	# for mkfile, README, etc.
-	return "application/octet-stream";
+	return nil;
 }
 
 hasbody(req: ref Req): int
