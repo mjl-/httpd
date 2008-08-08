@@ -3,6 +3,6 @@
 DIRS=\
 	module\
 	appl\
-	install\
+	man\
 
 <$ROOT/mkfiles/mksubdirs
