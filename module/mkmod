@@ -1,7 +1,7 @@
 MODDIR=$ROOT/module
 
-$MODDIR/%.m:    %.m
-        rm -f $MODDIR/$stem.m && cp $stem.m $MODDIR/$stem.m
+$MODDIR/%.m:	%.m
+	rm -f $MODDIR/$stem.m && cp $stem.m $MODDIR/$stem.m
 
 
 MODFILES=${MODS:%=$MODDIR/%}
@@ -10,7 +10,7 @@ all:QV:
 	
 clean:QV:
 	
-install:V:      $MODFILES
+install:V:	$MODFILES
 
 nuke:V:
-        rm -f $MODFILES
+	rm -f $MODFILES

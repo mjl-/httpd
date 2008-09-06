@@ -52,6 +52,7 @@ doc/testing.txt can be used for testing.  it has to be done manually,
 enough corner cases have not been tested, but quite a few have.
 
 todo:
+- make dirlisting more flexibly configurable?  i.e. per prefix?  so some dirs can be listable, but some subdirs cannot (but some subsubdirs can).  or the other way around.
 - support transfer-encoding chunked and compressed content-encodings from client?
 - check for security issues with http
 - transparent compression?
