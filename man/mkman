@@ -10,5 +10,6 @@ all:QV:
 clean:QV:
 	
 install:V:	$MANFILES
+
 nuke:V:
 	rm -f $MANFILES
