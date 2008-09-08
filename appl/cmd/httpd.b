@@ -987,8 +987,19 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 		resp.h.add("content-type", ct);
 	else
 		warn(op.id, sprint("could not determine content-type:  host %q path %q query %q", op.req.h.get("host"), op.req.url.path, op.req.url.query));
-	op.length = dir.length;
-	resp.h.add("content-length", string op.length);
+
+	# synthetic files sometimes don't have meaningful dir.length.
+	# there is no one true way to determine if a file is synthetic.  this is the most reasonable.
+	issynthetic := dir.length == big 0 && dir.qid.vers == 0;
+	if(issynthetic) {
+		op.chunked = resp.version() >= HTTP_11;
+	} else {
+		op.length = dir.length;
+		resp.h.add("content-length", string op.length);
+	}
+
+	if(issynthetic && (req.h.has("range", nil) || req.h.has("if-range", nil)))
+		return responderrmsg(op, Enotsatisfiable, nil);
 
 	(valid, ranges) := parserange(req.version(), req.h.find("range"), dir.length);
 	if(!valid) {
@@ -1026,6 +1037,20 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 
 	if(req.method == HEAD)
 		return;
+
+	if(issynthetic) {
+		buf := array[Sys->ATOMICIO] of byte;
+		for(;;) {
+			n := sys->readn(dfd, buf, len buf);
+			if(n == 0)
+				break;
+			if(n < 0)
+				die(id, sprint("reading file: %r"));
+			hwrite(op, buf[:n]);
+		}
+		hwriteeof(op);
+		return;
+	}
 
 	for(; ranges != nil; ranges = tl ranges) {
 		(off, end) := *hd ranges;
