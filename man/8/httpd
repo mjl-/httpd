@@ -4,13 +4,16 @@ httpd \- HTTP server
 .SH SYNOPSIS
 .B httpd
 [
-.B -dhL
+.B -dh
 ] [
 .B -A
 .I path realm user:pass
 ] [
 .B -C
 .I cachesecs
+] [
+.B -L
+.I listpath 0|1
 ] [
 .B -a
 .I addr
@@ -96,7 +99,7 @@ mime    ext=.erl        type='text/plain; charset=utf-8'
 
 # port=80 is not necessary, it's the default
 host=www.example.com port=80
-        listings
+        listings	path=''
         cachesecs=60
         index   file=index.html file=index.htm file=index.txt
         redir   src='^/oldfile$'        dst=/newfile
@@ -154,13 +157,15 @@ and
 specify which entry to use for requests instead.
 `Port' may be omitted, defaulting to `80'.  `Usehost' defaults to the value of `port'.
 .TP
-.B -L
-For directories, return a listing of files in html.
-Listings are only returned when no index file has been found, as specified with
-.BR -i .
-The per-host configuration attribute is
-`listings'
-(value ignored).
+.BI -L " path 0|1"
+For
+.I path
+and its subdirectories, set whether the request for a directory returns a html-formatted listing of files (when the second parameter is `1'), or a "file not found"-error (when the second parameter is `0').
+Listings are only returned when no index file (see
+.BR -i )
+The per-host configuration attributes are
+`listings' and `nolistings' (value ignored).  One or more paths can be specified using the attribute `path'.
+In determining whether to list directory contents, the most specific match (longest prefix) wins.
 .TP
 .BI -A " path realm user:pass"
 Require authorization for

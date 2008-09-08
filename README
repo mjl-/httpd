@@ -52,6 +52,7 @@ doc/testing.txt can be used for testing.  it has to be done manually,
 enough corner cases have not been tested, but quite a few have.
 
 todo:
+- when responding with chunked data, can we embed an error message in a chunks comment-part when an error with reading the data occurs?
 - support transfer-encoding chunked and compressed content-encodings from client?
 - check for security issues with http
 - transparent compression?

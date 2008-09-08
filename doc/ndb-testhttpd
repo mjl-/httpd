@@ -27,7 +27,7 @@ mime	ext=.jpg	type='testing/jpg'
 
 host=localhost port=8000
 	cachesecs=60
-	listings
+	listings	path=''
 	listen	ip=127.1
 	index	file=index.html file=index.htm file=index.txt
 	redir	src='^/redir1$'		dst=http://www.example.com/redir1
@@ -57,4 +57,4 @@ alias
 
 host='*' port=8000
 	index	file=index.html file=index.htm file=index.txt
-	listings
+	listings	path=''

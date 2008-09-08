@@ -54,7 +54,8 @@ Repl: adt {
 # config for a single host,port
 Cfg: adt {
 	host, port:	string;
-	listings, cachesecs:	int;
+	listings:	array of ref (string, int);  # path prefix, list (true/false)
+	cachesecs:	int;
 	listens:	list of ref (string, string);	# ip, port
 	cgipaths:	list of ref (string, string, list of string, int);	# path, cmd|addr, methods, Cgi|Scgi
 	indexfiles:	list of string;
@@ -276,7 +277,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	arg := load Arg Arg->PATH;
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-dhL] [-A path realm user:pass] [-C cachesecs] [-a addr] [-c path command methods] [-f ctlchan] [-i indexfile] [-l logfile] [-n config] [-r pathre dest] [-s path addr methods] [-t extension mimetype] webroot");
+	arg->setusage(arg->progname()+" [-dh] [-A path realm user:pass] [-C cachesecs] [-L listpath 0|1] [-a addr] [-c path command methods] [-f ctlchan] [-i indexfile] [-l logfile] [-n config] [-r pathre dest] [-s path addr methods] [-t extension mimetype] webroot");
 	while((c := arg->opt()) != 0)
 		case c {
 		'A' =>	defcfg.auths = ref (arg->earg(), arg->earg(), base64->enc(array of byte arg->earg()))::defcfg.auths;
@@ -285,7 +286,12 @@ init(nil: ref Draw->Context, args: list of string)
 				raise "fail:usage";
 			}
 		'C' =>	defcfg.cachesecs = int arg->earg();
-		'L' =>	defcfg.listings++;
+		'L' =>	path := arg->earg();
+			what := int arg->earg();
+			nl := array[len defcfg.listings+1] of ref (string, int);
+			nl[:] = defcfg.listings;
+			nl[len defcfg.listings] = ref (path, what);
+			defcfg.listings = nl;
 		'a' =>	cfgs.addrs = arg->earg()::cfgs.addrs;
 		'c' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), sys->tokenize(arg->earg(), " ,").t1, Cgi)::defcfg.cgipaths;
 		'd' =>	cfgs.debugflag++;
@@ -878,7 +884,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 			break;
 		}
 	}
-	if(dfd == nil || dok != 0 || (dir.mode&Sys->DMDIR) && (!cfg.listings || path != nil && path[len path-1] != '/'))
+	if(dfd == nil || dok != 0 || (dir.mode&Sys->DMDIR) && (!dolisting(cfg, path) || path != nil && path[len path-1] != '/'))
 		return responderrmsg(op, Enotfound, nil);
 
 	if(req.method == POST) {
@@ -1044,6 +1050,18 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 			hwrite(op, array of byte "\r\n");
 	}
 	hwriteeof(op);
+}
+
+dolisting(cfg: ref Cfg, path: string): int
+{
+	for(i := 0; i < len cfg.listings; i++) {
+		(lpath, what) := *cfg.listings[i];
+		if(str->prefix(lpath, path)) {
+			say(-1, sprint("listing for path %q: %d, prefix: %q", path, what, lpath));
+			return what;
+		}
+	}
+	return 0;
 }
 
 listdir(path: string, op: ref Op, dfd: ref Sys->FD)
@@ -1862,6 +1880,26 @@ parserange(version: int, rangehdr: (int, string), length: big): (int, list of re
 	return (valid, rev(r));
 }
 
+listingssort(cfg: ref Cfg)
+{
+	sort(cfg.listings, listingge);
+}
+
+sort[T](a: array of T, ge: ref fn(a, b: T): int)
+{
+	for(i := 1; i < len a; i++) {
+		tmp := a[i];
+		for(j := i; j > 0 && ge(a[j-1], tmp); j--)
+			a[j] = a[j-1];
+		a[j] = tmp;
+	}
+}
+
+listingge(e1, e2: ref (string, int)): int
+{
+	return len e1.t0 < len e2.t0;
+}
+
 strip(s, cl: string): string
 {
 	return droptl(str->drop(s, cl), cl);
@@ -2147,20 +2185,18 @@ Cfgs.find(c: self ref Cfgs, host, port: string): ref Cfg
 
 Cfg.new(): ref Cfg
 {
-	return ref Cfg("", "80", 0, -1, nil, nil, nil, nil, nil);
+	return ref Cfg("", "80", array[0] of ref (string, int), -1, nil, nil, nil, nil, nil);
 }
 
 Cfg.read(e: ref Dbentry, defaultport: string): (ref Cfg, string)
 {
 	cfg := Cfg.new();
 
-	for(l := list of {"listings", "cachesecs"}; l != nil; l = tl l) {
+	for(l := list of {"cachesecs"}; l != nil; l = tl l) {
 		for(r := e.find(hd l); r != nil; r = tl r) {
 			for(attrs := (hd r).t1; attrs != nil; attrs = tl attrs) {
 				val := (hd attrs).val;
 				case (hd attrs).attr {
-				"listings" =>
-					cfg.listings = 1;
 				"cachesecs" =>
 					cfg.cachesecs = int val;
 				* =>
@@ -2170,11 +2206,20 @@ Cfg.read(e: ref Dbentry, defaultport: string): (ref Cfg, string)
 		}
 	}
 
-	for(l = list of {"listen", "redir", "auth", "index", "cgi", "scgi"}; l != nil; l = tl l) {
+	for(l = list of {"listings", "nolistings", "listen", "redir", "auth", "index", "cgi", "scgi"}; l != nil; l = tl l) {
 		attr := hd l;
 		for(r := e.find(attr); r != nil; r = tl r) {
 			(tups, nil) := hd r;
 			case attr {
+			"listings" or "nolistings" =>
+				what := attr == "listings";
+				for(pl := tups.find("path"); pl != nil; pl = tl pl) {
+					nl := array[len cfg.listings+1] of ref (string, int);
+					nl[:] = cfg.listings;
+					nl[len cfg.listings] = ref ((hd pl).val, what);
+					cfg.listings = nl;
+				}
+
 			"listen" =>
 				ip := tups.find("ip");
 				port := tups.find("port");
@@ -2188,6 +2233,7 @@ Cfg.read(e: ref Dbentry, defaultport: string): (ref Cfg, string)
 				if(port != nil)
 					portstr = (hd port).val;
 				cfg.listens = (ref (ipaddr.text(), string int portstr))::cfg.listens;
+
 			"redir" =>
 				src := tups.find("src");
 				dst := tups.find("dst");
@@ -2197,6 +2243,7 @@ Cfg.read(e: ref Dbentry, defaultport: string): (ref Cfg, string)
 				if(rerr != nil)
 					return (nil, "parsing redir: "+rerr);
 				cfg.redirs = repl::cfg.redirs;
+
 			"auth" =>
 				path := tups.find("path");
 				realm := tups.find("realm");
@@ -2207,9 +2254,11 @@ Cfg.read(e: ref Dbentry, defaultport: string): (ref Cfg, string)
 				if(haschar((hd realm).val, '"'))
 					return (nil, "realm must not have double quote, not supported by http/1.0");
 				cfg.auths = ref ((hd path).val, (hd realm).val, base64->enc(array of byte ((hd user).val+":"+(hd pass).val)))::cfg.auths;
+
 			"index" =>
 				for(file := tups.find("file"); file != nil; file = tl file)
 					cfg.indexfiles = (hd file).val::cfg.indexfiles;
+
 			"cgi" =>
 				path := tups.find("path");
 				cmd := tups.find("cmd");
@@ -2221,6 +2270,7 @@ Cfg.read(e: ref Dbentry, defaultport: string): (ref Cfg, string)
 				if(methodtups != nil)
 					methods = sys->tokenize((hd methodtups).val, " ,").t1;
 				cfg.cgipaths = ref ((hd path).val, (hd cmd).val, methods, Cgi)::cfg.cgipaths;
+
 			"scgi" =>
 				path := tups.find("path");
 				addr := tups.find("addr");
@@ -2246,6 +2296,7 @@ Cfg.rev(cfg: self ref Cfg)
 	cfg.indexfiles = rev(cfg.indexfiles);
 	cfg.redirs = rev(cfg.redirs);
 	cfg.auths = rev(cfg.auths);
+	listingssort(cfg);
 }
 
 
