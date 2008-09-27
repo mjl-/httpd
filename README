@@ -1,6 +1,14 @@
+# status
+
+quite useful, has been in production for quite some time.
+
+
+# intro
+
 httpd is a simple httpd.
 
 features:
+
 - http/1.0, http/1.1 (keep-alive, chunked responses).  no "http/0.9".
 - cgi and scgi support
 - virtual hosts
@@ -22,16 +30,13 @@ see the manual page for full documentation
 to install this software, make sure there is a mkconfig file in
 this directory.  you can symlink/bind the one from your inferno
 installation.  next, type "mk install".  httpd depends on package
-"http", the http library, published using mercurial.  get it by:
+"http", the http library, published using mercurial.  get it from
+http://www.ueber.net/code/r/http.
 
-	hg clone static-http://www.ueber.net/who/mjl/hg/http/
 
+# download
 
-# latest version
-
-this code is kept up to date using mercurial, to get a fresh copy:
-
-	hg clone static-http://www.ueber.net/who/mjl/hg/httpd/
+see http://www.ueber.net/code/r/httpd for instructions.
 
 
 # licence
@@ -44,6 +49,7 @@ me at mechiel@ueber.net or mechiel@xs4all.nl.
 # non-features
 
 some features will not be implemented.  for example:
+
 - connection rate limiting.  should be done at a higher level, e.g. firewall.
 
 # testing/todo
@@ -52,6 +58,7 @@ doc/testing.txt can be used for testing.  it has to be done manually,
 enough corner cases have not been tested, but quite a few have.
 
 todo:
+
 - when responding with chunked data, can we embed an error message in a chunks comment-part when an error with reading the data occurs?
 - support transfer-encoding chunked and compressed content-encodings from client?
 - check for security issues with http
