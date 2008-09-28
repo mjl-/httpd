@@ -27,4 +27,4 @@ DISBIN=$ROOT/dis
 <$ROOT/mkfiles/mkdis
 
 logparse.b: logparse.y
-	yacc -D3 -o logparse.b logparse.y
+	yacc -o logparse.b logparse.y

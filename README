@@ -33,6 +33,9 @@ installation.  next, type "mk install".  httpd depends on package
 "http", the http library, published using mercurial.  get it from
 http://www.ueber.net/code/r/http.
 
+to compile outside of inferno, you may want to comment out logparse.b
+in appl/cmd/mkfile.
+
 
 # download
 
