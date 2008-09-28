@@ -1,43 +1,41 @@
 implement Httpd;
 
 include "sys.m";
+	sys: Sys;
+	print, sprint, fprint, fildes: import sys;
 include "draw.m";
 include "arg.m";
 include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
 include "daytime.m";
+	daytime: Daytime;
 include "env.m";
+	env: Env;
 include "string.m";
+	str: String;
 include "exception.m";
+	exc: Exception;
 include "keyring.m";
+	keyring: Keyring;
 include "security.m";
+	random: Random;
 include "encoding.m";
+	base64: Encoding;
 include "sh.m";
+	sh: Sh;
 include "ip.m";
+	ipm: IP;
+	IPaddr: import ipm;
 include "attrdb.m";
+	attrdb: Attrdb;
+	Db, Dbentry, Tuples: import attrdb;
 include "regex.m";
+	regex: Regex;
 include "mhttp.m";
-
-sys: Sys;
-daytime: Daytime;
-env: Env;
-exc: Exception;
-keyring: Keyring;
-random: Random;
-str: String;
-base64: Encoding;
-sh: Sh;
-ipm: IP;
-attrdb: Attrdb;
-regex: Regex;
-http: Http;
-
-print, sprint, fprint, fildes: import sys;
-Url, Req, Resp, Hdrs, HTTP_10, HTTP_11, encodepath: import http;
-UNKNOWN, OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, CONNECT: import http;
-IPaddr: import ipm;
-Db, Dbentry, Tuples: import attrdb;
+	http: Http;
+	Url, Req, Resp, Hdrs, HTTP_10, HTTP_11, encodepath: import http;
+	UNKNOWN, OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, CONNECT: import http;
 
 Version: con "nhttpd/0";
 

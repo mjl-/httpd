@@ -1,20 +1,30 @@
 <../../mkconfig
 
-DIRS=\
-
 TARG=\
 	httpd.dis\
+	logparse.dis\
 
 SYSMODULES=\
+	mhttp.m\
 	arg.m\
+	attrdb.m\
 	bufio.m\
 	daytime.m\
 	draw.m\
+	encoding.m\
+	env.m\
+	exception.m\
+	ip.m\
 	keyring.m\
+	regex.m\
+	security.m\
+	sh.m\
 	string.m\
 	sys.m\
 
 DISBIN=$ROOT/dis
 
 <$ROOT/mkfiles/mkdis
-<$ROOT/mkfiles/mksubdirs
+
+logparse.b: logparse.y
+	yacc -D3 -o logparse.b logparse.y
