@@ -139,6 +139,7 @@ mimetypes := array[] of {
 	(".c",		"text/plain; charset=utf-8"),
 	(".b",		"text/plain; charset=utf-8"),
 	(".h",		"text/plain; charset=utf-8"),
+	(".y",		"text/plain; charset=utf-8"),
 	(".sh",		"text/plain; charset=utf-8"),
 	(".orig",	"text/plain; charset=utf-8"),
 	(".conf",	"text/plain; charset=utf-8"),
