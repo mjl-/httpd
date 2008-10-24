@@ -1731,7 +1731,7 @@ mimetype(cfgs: ref Cfgs, path: string): string
 	for(i := 0; i < len mimetypes; i++)
 		if(suffix(mimetypes[i].t0, path))
 			return mimetypes[i].t1;
-	if(!haschar(path, '.'))
+	if(!haschar(str->splitstrr(path, "/").t1, '.'))
 		return "text/plain; charset=utf-8";	# for mkfile, README, etc.
 	return nil;
 }
