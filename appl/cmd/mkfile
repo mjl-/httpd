@@ -2,7 +2,7 @@
 
 TARG=\
 	httpd.dis\
-	logparse.dis\
+	#logparse.dis\
 
 SYSMODULES=\
 	mhttp.m\

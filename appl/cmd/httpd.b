@@ -168,6 +168,7 @@ mimetypes := array[] of {
 	(".zip",	"application/zip"),
 	(".wav",	"audio/x-wav"),
 	(".jpeg",	"image/jpeg"),
+	(".py",		"text/plain; charset=utf-8"),
 };
 
 Eok:			con 200;
