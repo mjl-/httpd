@@ -1015,9 +1015,11 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 		if(len ranges == 1) {
 			(start, end) := *hd ranges;
 			resp.h.add("content-range", sprint("bytes %bd-%bd/%bd", start, end-big 1, dir.length));
+			resp.h.set("content-length", string (end-start));
 		} else {
 			bound = sha1(array of byte (string <-randch+","+string op.now));
 			resp.h.set("content-type", "multipart/byteranges; boundary="+bound);
+			resp.h.del("content-length", nil);
 			op.chunked = resp.version() >= HTTP_11;
 		}
 		resp.st = string Epartialcontent;
