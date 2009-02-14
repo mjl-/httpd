@@ -1029,7 +1029,7 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 		ranges = ref (big 0, dir.length)::nil;
 
 	if(op.cfg.cachesecs >= 0)
-		resp.h.add("cache-control", sprint("maxage=%d", op.cfg.cachesecs));
+		resp.h.add("cache-control", sprint("max-age=%d", op.cfg.cachesecs));
 
 	accesslog(op);
 
@@ -1102,7 +1102,7 @@ listdir(path: string, op: ref Op, dfd: ref Sys->FD)
 	op.chunked = resp.version() >= HTTP_11;
 
 	if(op.cfg.cachesecs >= 0)
-		resp.h.add("cache-control", sprint("maxage=%d", op.cfg.cachesecs));
+		resp.h.add("cache-control", sprint("max-age=%d", op.cfg.cachesecs));
 
 	accesslog(op);
 
