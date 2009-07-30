@@ -1,9 +1,9 @@
-#  echo reload >/chan/httpd
+#  echo reload >/chan/shttpd
 
 debug
 vhost
-ctlchan=httpd
-#accesslog=/services/logs/httpdaccess
+ctlchan=shttpd
+#accesslog=/services/logs/shttpdaccess
 announce=net!localhost!8000
 announce=net!localhost!8001
 

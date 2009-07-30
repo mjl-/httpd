@@ -5,7 +5,7 @@ quite useful, has been in production for quite some time.
 
 # intro
 
-httpd is a simple httpd.
+shttpd is a simple httpd.
 
 features:
 
@@ -29,7 +29,7 @@ see the manual page for full documentation
 
 to install this software, make sure there is a mkconfig file in
 this directory.  you can symlink/bind the one from your inferno
-installation.  next, type "mk install".  httpd depends on package
+installation.  next, type "mk install".  shttpd depends on package
 "http", the http library, published using mercurial.  get it from
 http://www.ueber.net/code/r/http.
 

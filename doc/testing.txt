@@ -1,11 +1,11 @@
-# start httpd for testing
+# start shttpd for testing
 
 emu -c0
-repo=src/httpd
-bind '#U*/home' /usr; bind -b '#s' /chan; ndb/cs; ndb/dns -r; cd; home=`{pwd}; cd $home/$repo/appl/cmd; sblpath=(/dis .)
+repo=src/shttpd
+bind '#U*/home' /usr; bind -b '#s' /chan; ndb/cs; ndb/dns -r; cd; home=`{pwd}; cd $home/$repo/appl/cmd/ip; sblpath=(/dis .)
 bind -a $home/$repo $home/$repo/doc/testroot/localhost:8000
 bind -a $home/$repo/man $home/$repo/doc/testroot/_default:8000
-./httpd -n $home/$repo/doc/ndb-testhttpd $home/$repo/doc/testroot
+./shttpd -n $home/$repo/doc/ndb-testshttpd $home/$repo/doc/testroot
 
 
 emu -c0
@@ -115,19 +115,19 @@ Connection: close
 
 # unknown extension -> application/octet-stream
 $cmd | sed '/^$/q'
-GET /appl/cmd/httpd.sbl HTTP/1.1
+GET /appl/cmd/ip/shttpd.sbl HTTP/1.1
 Host: localhost:8000
 Connection: close
 
 # known extension
 $cmd | sed '/^$/q'
-GET /appl/cmd/httpd.b HTTP/1.1
+GET /appl/cmd/ip/shttpd.b HTTP/1.1
 Host: localhost:8000
 Connection: close
 
 # user-specified: .dis -> application/x-dis
 $cmd | sed '/^$/q'
-GET /appl/cmd/httpd.dis HTTP/1.1
+GET /appl/cmd/ip/shttpd.dis HTTP/1.1
 Host: localhost:8000
 Connection: close
 
@@ -651,7 +651,7 @@ Host: [localhost]:8000
 Connection: close
 
 # default config
-# ./httpd -n /dev/null -d -a 'net!*!8000' $home/$repo/doc/testroot
+# ./shttpd -n /dev/null -d -a 'net!*!8000' $home/$repo/doc/testroot
 
 # should return normal response
 $cmd
@@ -662,16 +662,16 @@ Connection: close
 
 # ctl chan: reload config
 # verify whether it works
-echo reload >/chan/httpd
+echo reload >/chan/shttpd
 
 # make change that breaks config, after reload it should keep config and still work
-echo reload >/chan/httpd
+echo reload >/chan/shttpd
 
 
 # command-line options: overrides config/ignored
 
-# start simple httpd:
-# ./httpd $home/$repo/doc/testroot
+# start simple shttpd:
+# ./shttpd $home/$repo/doc/testroot
 
 # request succeeds!
 $cmd
@@ -680,8 +680,8 @@ Host: bogus
 Connection: close
 
 
-# start httpd with config and with conflicting options, before and after loading config
-# ./httpd -h -d -a 'net!*!8001' -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 '' -c /cgi '{echo blah}' '' -t .txt test/flierp -n /dev/null -a 'net!*!8000' $home/$repo/doc/testroot
+# start shttpd with config and with conflicting options, before and after loading config
+# ./shttpd -h -d -a 'net!*!8001' -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 '' -c /cgi '{echo blah}' '' -t .txt test/flierp -n /dev/null -a 'net!*!8000' $home/$repo/doc/testroot
 
 # now, all those options should be off except -f, and we should be listening on port 8000 now.
 
@@ -710,7 +710,7 @@ Connection: close
 
 
 # this time, these options should still be used
-# ./httpd  -n /dev/null -d -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 '' -c /cgi '{echo blah}' '' -t .txt test/flierp -a 'net!*!8000' $home/$repo/doc/testroot
+# ./shttpd  -n /dev/null -d -C 10 -f blah -i index.txt -i index.html -l /dev/null -r '^/redir0' /redir1 -s /scgi net!localhost!1234 '' -c /cgi '{echo blah}' '' -t .txt test/flierp -a 'net!*!8000' $home/$repo/doc/testroot
 
 # returns listing of testroot
 $cmd

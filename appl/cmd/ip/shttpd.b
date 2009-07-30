@@ -1,4 +1,4 @@
-implement Httpd;
+implement Shttpd;
 
 include "sys.m";
 	sys: Sys;
@@ -37,7 +37,7 @@ include "mhttp.m";
 	Url, Req, Resp, Hdrs, HTTP_10, HTTP_11, encodepath: import http;
 	UNKNOWN, OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, CONNECT: import http;
 
-Version: con "nhttpd/0";
+Version: con "shttpd/0";
 
 
 Repl: adt {
@@ -110,7 +110,7 @@ ctlchan := "";
 
 environment: list of (string, string);
 
-Httpd: module {
+Shttpd: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
 };
 
@@ -355,7 +355,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(timefd == nil)
 		fail(sprint("open /dev/time: %r"));
 
-	errorfd = sys->open("/services/logs/httpderror", Sys->OWRITE);
+	errorfd = sys->open("/services/logs/shttpderror", Sys->OWRITE);
 	if(errorfd != nil)
 		sys->seek(errorfd, big 0, Sys->SEEKEND);
 
@@ -397,7 +397,7 @@ init(nil: ref Draw->Context, args: list of string)
 		spawn listen(hd addrs, aconn, sync := chan of int);
 		<-sync;
 	}
-	warn(0, sprint("httpd started at %s", daytime->time()));
+	warn(0, sprint("shttpd started at %s", daytime->time()));
 }
 
 listen(addr: string, aconn: Sys->Connection, sync: chan of int)

@@ -1,10 +1,7 @@
-<../../mkconfig
+<../../../mkconfig
 
 TARG=\
-	#logparse.dis\
-
-DIRS=\
-	ip\
+	shttpd.dis\
 
 SYSMODULES=\
 	mhttp.m\
@@ -24,10 +21,6 @@ SYSMODULES=\
 	string.m\
 	sys.m\
 
-DISBIN=$ROOT/dis
+DISBIN=$ROOT/dis/ip
 
 <$ROOT/mkfiles/mkdis
-<$ROOT/mkfiles/mksubdirs
-
-logparse.b: logparse.y
-	yacc -o logparse.b logparse.y

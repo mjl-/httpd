@@ -1,8 +1,8 @@
-.TH HTTPD 8
+.TH SHTTPD 8
 .SH NAME
-httpd \- HTTP server
+shttpd \- HTTP server
 .SH SYNOPSIS
-.B httpd
+.B ip/shttpd
 [
 .B -dh
 ] [
@@ -44,7 +44,7 @@ httpd \- HTTP server
 ]
 .I webroot
 .SH DESCRIPTION
-.I Httpd
+.I Shttpd
 is an HTTP server that supports most of the reasonable features of contemporary http servers:
 .IP \(bu
 http/1.0 and http/1.1 support
@@ -72,7 +72,7 @@ as compliant as possible, where reasonable
 mindful of security
 
 .PP
-.I Httpd
+.I Shttpd
 serves files from
 .IR webroot .
 Options, described below, configure all features except virtual hosting.
@@ -89,8 +89,8 @@ debug
 #nodebug
 vhost
 #novhost
-ctlchan=httpd
-accesslog=/services/logs/httpdaccess
+ctlchan=shttpd
+accesslog=/services/logs/shttpdaccess
 announce=net!www.example.com!80
 
 mime    ext=.text       type='text/plain; charset=utf-8'
@@ -118,7 +118,7 @@ The options and their configuration file equivalents:
 .TP
 .B -d
 Print debug messages to standard error and the error log,
-.IR /services/logs/httpderror .
+.IR /services/logs/shttpderror .
 Attributes `debug' and `nodebug' enable and disable debugging.  Due to attrdb, `nodebug' always takes precedence regardless of position in file.
 .TP
 .B -h
@@ -203,9 +203,9 @@ The global configuration attribute is
 `announce',
 the value is the address to listen on.
 For a reload of the configuration attributes, the announce-addresses are ignored.  To announce to a different set of ports, restart
-.IR httpd .
+.IR shttpd .
 If no addresses are specified,
-.I httpd
+.I shttpd
 will listen on
 .IR net!*!http .
 .TP
@@ -352,18 +352,18 @@ If virtual hosts are enabled, the local address is checked for each request.  If
 
 .PP
 To prevent files to be served to the public inadvertently, the root directory of the
-.I httpd
+.I shttpd
 is replaced by
 .I webroot
 with
 .IR sys-bind (2).
 Also, suspicious combinations of headers are typically responded to with an error.  This policy may err on the cautious side.  For example, some important headers are not allowed to be specified twice.
 Note that CGI programs run in the namespace
-.I httpd
+.I shttpd
 had originally been started with.
 
 .SH SOURCE
-.B /appl/cmd/httpd.b
+.B /appl/cmd/ip/shttpd.b
 .SH SEE ALSO
 .IR attrdb (6),
 .IR regex (6)
@@ -383,11 +383,11 @@ See README.
 Incompatibilities with the rfcs:
 .br
 * If the `host'-header references a non-existing domain name and virtual hosting is enabled,
-.I httpd
+.I shttpd
 responds with `404 Object Not Found', instead of the rfc2626-required `400 Bad Request'.
 .br
 * For http/1.0 requests, the `host'-header is also used.
 .br
 * Only a single format of dates is understood, three are specified (but deprecated).
-.I Httpd
+.I Shttpd
 returns an error when a date that can not be parsed might result in incorrect behaviour (rather can only being less efficient, e.g. in the context of caching).

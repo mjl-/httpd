@@ -1,6 +1,6 @@
 <../mkconfig
 
 MAN=\
-	8/httpd\
+	8/shttpd\
 
 <mkman
