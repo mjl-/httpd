@@ -790,8 +790,8 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		if(cfg.host != "") {
 			hostdir = cfg.host+"!"+cfg.port;
 			if(sys->chdir(hostdir) != 0) {
-				hostdir = nil;
 				if(debugflag) say(id, sprint("using hostdir %q from config failed, trying default", hostdir));
+				hostdir = nil;
 			}
 		}
 		if(hostdir == nil) {
