@@ -788,14 +788,14 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 	if(op.cfgs.vhostflag) {
 		hostdir: string;
 		if(cfg.host != "") {
-			hostdir = cfg.host+":"+cfg.port;
+			hostdir = cfg.host+"!"+cfg.port;
 			if(sys->chdir(hostdir) != 0) {
 				hostdir = nil;
 				if(debugflag) say(id, sprint("using hostdir %q from config failed, trying default", hostdir));
 			}
 		}
 		if(hostdir == nil) {
-			hostdir = "_default:"+cfg.port;
+			hostdir = "_default!"+cfg.port;
 			if(sys->chdir(hostdir) != 0)
 				return responderrmsg(op, Enotfound, nil);
 		}
@@ -846,7 +846,11 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 				lport := "";
 				if(op.lport != "80")
 					lport = ":"+op.lport;
-				dest = "http://"+op.lhost+lport+dest;
+				httphost := op.lhost;
+				(ok, ip) := IPaddr.parse(httphost);
+				if(ok == 0 && !ip.isv4())
+					httphost = "["+httphost+"]";
+				dest = "http://"+httphost+lport+dest;
 			}
 		}
 		if(debugflag) say(id, sprint("redirecting from %q to %q", path, dest));
@@ -1700,23 +1704,23 @@ accesslog(op: ref Op)
 
 splithost(s: string): (string, string)
 {
-	sep := ":";	# host name or ip4, "host:port" or "ip4:host"
-	if(s != nil && s[0] == '[')	# ip6 host, "[ip6]:port"
-		sep = "]";
-	(host, port) := str->splitstrl(s, sep);
-	if(port != nil)
-		port = port[len sep:];
-	if(sep == "]" && host != nil && host[0] == '[' && port != nil) {
-		host = host[1:len host];
-		port = port[1:];
-		if(port != nil && port[0] == ':')
-			port = port[1:];
-		(ok, ipaddr) := IPaddr.parse(host);
-		if(ok != 0 || ipaddr.isv4())
-			return (nil, port);
+	host: string;
+	if(str->prefix("[", s)) {
+		# "[ip6]"
+		(ip, rem) := str->splitstrl(s[1:], "]");
+		if(!str->prefix("]", rem))
+			return (nil, nil);
+		s = rem[1:];
+		(ok, ipaddr) := IPaddr.parse(ip);
+		if(ok != 0)
+			return (nil, nil);
+		# canonical form, eg for ipv4 mapped on ipv6
 		host = ipaddr.text();
-	}
-	return (host, port);
+	} else
+		(host, s) = str->splitstrl(s, ":");
+	if(str->prefix(":", s))
+		s = s[1:];
+	return (host, s);
 }
 
 suffix(suf, s: string): int

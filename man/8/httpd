@@ -122,14 +122,14 @@ Print debug messages to standard error and the error log,
 Attributes `debug' and `nodebug' enable and disable debugging.  Due to attrdb, `nodebug' always takes precedence regardless of position in file.
 .TP
 .B -h
-Serve multiple domains, known as virtual hosting.  The `host'-header in the request (for http/1.1-only) selects the targeted host.  If enabled, requests for
+Serve multiple domains, known as virtual hosting.  The `host'-header in the request (for http/1.1-only) selects the targeted host.  If enabled, the
 .I host
-to TCP
+and TCP
 .I port
-are served from directory
-.IR webroot/host:port .
-If no host has been specified, e.g. for http/1.0, `_default' is used as host.
+in the request are looked up in the configuration, and files are served from
+.IR webroot/host!port .
 Note that the port is not taken from the `host'-header, but always from the local port of the connection.
+If no configuration could be found or when no specific host was requested (e.g. for http/1.0 requests), the default configuration will be used:  host `_default' and port 80.
 Files in
 .I webroot
 are never served directly with
