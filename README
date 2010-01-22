@@ -24,22 +24,23 @@ features:
 
 see the manual page for full documentation
 
+# download
+
+get the latest version from:
+
+	http://www.ueber.net/code/r/httpd
+
 
 # install
 
-to install this software, make sure there is a mkconfig file in
-this directory.  you can symlink/bind the one from your inferno
-installation.  next, type "mk install".  shttpd depends on package
-"http", the http library, published using mercurial.  get it from
+first make sure you have "http", the http library installed, see
 http://www.ueber.net/code/r/http.
 
-to compile outside of inferno, you may want to comment out logparse.b
-in appl/cmd/mkfile.
+make sure you have $ROOT set, now "mk install" to compile and install
+the files.
 
-
-# download
-
-see http://www.ueber.net/code/r/httpd for instructions.
+when building from within inferno, insert SYSHOST=Inferno and ROOT=
+in the mk invocations to override the values in the mkconfig.
 
 
 # licence
