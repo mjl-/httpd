@@ -24,6 +24,7 @@ features:
 
 see the manual page for full documentation
 
+
 # download
 
 get the latest version from:
@@ -47,7 +48,7 @@ in the mk invocations to override the values in the mkconfig.
 
 all files written by me (i.e. all except the rfcs in doc/) are
 in the public domain.  for bugs, questions, comments, etc., contact
-me at mechiel@ueber.net or mechiel@xs4all.nl.
+me at mechiel@ueber.net.
 
 
 # non-features
@@ -66,7 +67,6 @@ todo:
 - when responding with chunked data, can we embed an error message in a chunks comment-part when an error with reading the data occurs?
 - support transfer-encoding chunked and compressed content-encodings from client?
 - check for security issues with http
-- transparent compression?
 - think of ssl?
 - try to fix dir listings for paths with multiple slashes in them.  firefox breaks on them, is firefox right?
 - test with other browsers
