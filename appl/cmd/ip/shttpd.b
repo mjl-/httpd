@@ -838,7 +838,7 @@ httptransact(pid: int, b: ref Iobuf, op: ref Op)
 		}
 		if(!match)
 			continue;
-		if(!str->prefix("http:", dest)) {
+		if(!str->prefix("http://", dest) && !str->prefix("https://", dest)) {
 			(havehost, hosthdr) := req.h.find("host");
 			if(havehost) {
 				dest = "http://"+hosthdr+dest;
