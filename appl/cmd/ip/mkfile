@@ -12,7 +12,6 @@ SYSMODULES=\
 	draw.m\
 	encoding.m\
 	env.m\
-	exception.m\
 	ip.m\
 	keyring.m\
 	regex.m\

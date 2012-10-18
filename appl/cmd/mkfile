@@ -2,6 +2,7 @@
 
 TARG=\
 	#logparse.dis\
+	#httplog.dis\
 
 DIRS=\
 	ip\

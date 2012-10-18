@@ -14,8 +14,6 @@ include "env.m";
 	env: Env;
 include "string.m";
 	str: String;
-include "exception.m";
-	exc: Exception;
 include "keyring.m";
 	keyring: Keyring;
 include "security.m";
@@ -59,6 +57,7 @@ Cfg: adt {
 	indexfiles:	list of string;
 	redirs:	list of ref Repl;
 	auths:	list of ref (string, string, string);	# path, realm, base64 user:pass
+	gzpaths:	list of string;
 
 	new:	fn(): ref Cfg;
 	read:	fn(e: ref Dbentry, defaultport: string): (ref Cfg, string);
@@ -253,7 +252,6 @@ init(nil: ref Draw->Context, args: list of string)
 	env = load Env Env->PATH;
 	daytime = load Daytime Daytime->PATH;
 	keyring = load Keyring Keyring->PATH;
-	exc = load Exception Exception->PATH;
 	random = load Random Random->PATH;
 	str = load String String->PATH;
 	base64 = load Encoding Encoding->BASE64PATH;
@@ -277,7 +275,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	arg := load Arg Arg->PATH;
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-dh] [-A path realm user:pass] [-C cachesecs] [-L listpath 0|1] [-a addr] [-c path command methods] [-f ctlchan] [-i indexfile] [-l logfile] [-n config] [-r pathre dest] [-s path addr methods] [-t extension mimetype] webroot");
+	arg->setusage(arg->progname()+" [-dh] [-A path realm user:pass] [-C cachesecs] [-L listpath 0|1] [-a addr] [-c path command methods] [-f ctlchan] [-i indexfile] [-l logfile] [-n config] [-r pathre dest] [-s path addr methods] [-t extension mimetype] [-z gzippath] webroot");
 	while((c := arg->opt()) != 0)
 		case c {
 		'A' =>	defcfg.auths = ref (arg->earg(), arg->earg(), base64->enc(array of byte arg->earg()))::defcfg.auths;
@@ -325,6 +323,7 @@ init(nil: ref Draw->Context, args: list of string)
 			defcfg.redirs = repl::defcfg.redirs;
 		's' =>	defcfg.cgipaths = ref (arg->earg(), arg->earg(), sys->tokenize(arg->earg(), " ,").t1, Scgi)::defcfg.cgipaths;
 		't' =>	cfgs.usertypes = ref (arg->earg(), arg->earg())::cfgs.usertypes;
+		'z' =>	defcfg.gzpaths = arg->earg()::defcfg.gzpaths;
 		* =>	arg->usage();
 		}
 	args = arg->argv();
@@ -1032,6 +1031,23 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 	} else
 		ranges = ref (big 0, dir.length)::nil;
 
+	if(gzipallowed(op.cfg.gzpaths, path))
+	if(gzipaccepted(req.h))
+	if(!issynthetic)
+	if(!req.h.find("range").t0)
+	if(!req.h.find("if-range").t0)
+	if((gzfd := sys->open(gzpath := "."+path+".gz", sys->OREAD)) != nil)
+	if(((nil, gzd) := sys->stat(gzpath)).t0 == 0)
+	if(gzd.length < dir.length)
+	if(gzd.mtime >= dir.mtime) {
+		op.length = gzd.length;
+		ranges = ref (big 0, gzd.length)::nil;
+		resp.h.add("content-encoding", "gzip");
+		resp.h.set("content-length", string gzd.length);
+		dfd = gzfd;
+		dir = gzd;
+	}
+
 	if(op.cfg.cachesecs >= 0)
 		resp.h.add("cache-control", sprint("max-age=%d", op.cfg.cachesecs));
 
@@ -1081,6 +1097,23 @@ plainfile(path: string, op: ref Op, dfd: ref Sys->FD, dir: Sys->Dir, tag: string
 			hwrite(op, array of byte "\r\n");
 	}
 	hwriteeof(op);
+}
+
+gzipallowed(l: list of string, p: string): int
+{
+	for(; l != nil; l = tl l)
+		if(str->prefix(hd l, p))
+			return 1;
+	return 0;
+}
+
+# warning: parsing is simplistic, not handling full http rules, but should be good enough for finding "gzip".
+gzipaccepted(h: ref Hdrs): int
+{
+	for(l := sys->tokenize(h.get("accept-encoding"), ",").t1; l != nil; l = tl l)
+		if(strip(str->splitstrl(hd l, ";").t0, " \t") == "gzip")
+			return 1;
+	return 0;
 }
 
 dolisting(cfg: ref Cfg, path: string): int
@@ -2216,7 +2249,7 @@ Cfgs.find(c: self ref Cfgs, host, port: string): ref Cfg
 
 Cfg.new(): ref Cfg
 {
-	return ref Cfg("", "80", array[0] of ref (string, int), -1, nil, nil, nil, nil, nil);
+	return ref Cfg("", "80", array[0] of ref (string, int), -1, nil, nil, nil, nil, nil, nil);
 }
 
 Cfg.read(e: ref Dbentry, defaultport: string): (ref Cfg, string)
@@ -2237,7 +2270,7 @@ Cfg.read(e: ref Dbentry, defaultport: string): (ref Cfg, string)
 		}
 	}
 
-	for(l = list of {"listings", "nolistings", "listen", "redir", "auth", "index", "cgi", "scgi"}; l != nil; l = tl l) {
+	for(l = list of {"listings", "nolistings", "listen", "redir", "auth", "index", "cgi", "scgi", "gzip"}; l != nil; l = tl l) {
 		attr := hd l;
 		for(r := e.find(attr); r != nil; r = tl r) {
 			(tups, nil) := hd r;
@@ -2313,6 +2346,9 @@ Cfg.read(e: ref Dbentry, defaultport: string): (ref Cfg, string)
 				if(methodtups != nil)
 					methods = sys->tokenize((hd methodtups).val, " ,").t1;
 				cfg.cgipaths = ref ((hd path).val, (hd addr).val, methods, Scgi)::cfg.cgipaths;
+			"gzip" =>
+				for(pl := tups.find("path"); pl != nil; pl = tl pl)
+					cfg.gzpaths = (hd pl).val::cfg.gzpaths;
 			}
 		}
 	}

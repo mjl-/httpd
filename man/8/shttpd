@@ -41,6 +41,9 @@ shttpd \- HTTP server
 ] [
 .B -t
 .I extension mimetype
+] [
+.B -z
+.I gzippath
 ]
 .I webroot
 .SH DESCRIPTION
@@ -339,6 +342,22 @@ The global configuration attribute is
 specifies the extension,
 `type'
 the mimetype.
+.TP
+.BI -z " gzippath"
+For a requested
+.I path
+starting with
+.IR gzippath ,
+return the gzip-compressed version
+.I path.gz
+instead.
+.I Path.gz
+is only returned if it exists and is smaller than the plain version, and
+.I path
+was not modified after
+.IR path.gz .
+The per-host configuration attribute is `gzip' (value unused), one
+or more `path' attributes specify the paths.
 
 .PP
 There is one last per-host configuration attribute that cannot be specified on the command-line:
